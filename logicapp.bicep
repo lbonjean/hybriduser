@@ -188,6 +188,22 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           }
           else: {
             actions: {
+              // Immediately return 202 Accepted to Graph API
+              Return_accepted_response: {
+                type: 'Response'
+                kind: 'Http'
+                inputs: {
+                  statusCode: 202
+                  headers: {
+                    'Content-Type': 'application/json'
+                  }
+                  body: {
+                    status: 'accepted'
+                    message: 'Change notifications will be processed asynchronously'
+                  }
+                }
+                runAfter: {}
+              }
               // Process each notification
               For_each_notification: {
                 type: 'Foreach'
@@ -581,25 +597,8 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                     }
                   }
                 }
-                runAfter: {}
-              }
-              // Return success response
-              Return_success_response: {
-                type: 'Response'
-                kind: 'Http'
-                inputs: {
-                  statusCode: 202
-                  headers: {
-                    'Content-Type': 'application/json'
-                  }
-                  body: {
-                    status: 'accepted'
-                    processedCount: '@length(triggerBody()?[\'value\'])'
-                    hasErrors: '@variables(\'hasError\')'
-                  }
-                }
                 runAfter: {
-                  For_each_notification: ['Succeeded', 'Failed']
+                  Return_accepted_response: ['Succeeded']
                 }
               }
             }
