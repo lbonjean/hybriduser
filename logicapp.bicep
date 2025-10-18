@@ -501,21 +501,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               }
                               runAfter: {}
                             }
-                            // Return success response - user skipped
-                            Return_skipped_response: {
-                              type: 'Response'
-                              inputs: {
-                                statusCode: 202
-                                body: {
-                                  status: 'skipped'
-                                  message: 'User not in administrative unit'
-                                  userId: '@{variables(\'userId\')}'
-                                }
-                              }
-                              runAfter: {
-                                Log_user_not_in_admin_unit: ['Succeeded']
-                              }
-                            }
                           }
                         }
                         runAfter: {
