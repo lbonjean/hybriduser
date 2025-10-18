@@ -408,107 +408,136 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               Check_if_cloud_managed: {
                                 type: 'If'
                                 expression: {
-                                  and: [
-                                    {
-                                      equals: [
-                                        '@parameters(\'disableSourceOfAuthorityUpdate\')'
-                                        false
-                                      ]
-                                    }
-                                    {
-                                      not: {
-                                        equals: [
-                                          '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
-                                          true
-                                        ]
-                                      }
-                                    }
-                                    {
-                                      or: [
-                                        {
-                                          equals: [
-                                            '@length(parameters(\'allowedAdminUnitNames\'))'
-                                            0
-                                          ]
-                                        }
-                                        {
-                                          contains: [
-                                            '@parameters(\'allowedAdminUnitNames\')'
-                                            '@body(\'Parse_admin_unit_details\')?[\'displayName\']'
-                                          ]
-                                        }
-                                      ]
-                                    }
-                                  ]
+                                  not: {
+                                    equals: [
+                                      '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
+                                      true
+                                    ]
+                                  }
                                 }
                                 runAfter: {
                                   Parse_sync_behavior: ['Succeeded']
                                 }
                                 actions: {
-                                  // isCloudManaged is false - needs update
-                                  Log_setting_source_of_authority: {
-                                    type: 'ApiConnection'
-                                    inputs: {
-                                      host: {
-                                        connection: {
-                                          name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                  // isCloudManaged is NOT true - check if we should update
+                                  Check_update_allowed: {
+                                    type: 'If'
+                                    expression: {
+                                      and: [
+                                        {
+                                          equals: [
+                                            '@parameters(\'disableSourceOfAuthorityUpdate\')'
+                                            false
+                                          ]
                                         }
-                                      }
-                                      method: 'post'
-                                      body: '@{json(concat(\'[{"EventType":"SettingSourceOfAuthority","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"false","Timestamp":"\',utcNow(),\'"}]\'))}'
-                                      headers: {
-                                        'Log-Type': 'HybridUserSync'
-                                      }
-                                      path: '/api/logs'
+                                        {
+                                          or: [
+                                            {
+                                              equals: [
+                                                '@length(parameters(\'allowedAdminUnitNames\'))'
+                                                0
+                                              ]
+                                            }
+                                            {
+                                              contains: [
+                                                '@parameters(\'allowedAdminUnitNames\')'
+                                                '@body(\'Parse_admin_unit_details\')?[\'displayName\']'
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                     runAfter: {}
-                                  }
-                                  // Set source of authority to cloud (isCloudManaged=true)
-                                  Set_source_of_authority: {
-                                    type: 'Http'
-                                    inputs: {
-                                      method: 'PATCH'
-                                      uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
-                                      authentication: {
-                                        type: 'ManagedServiceIdentity'
-                                        audience: 'https://graph.microsoft.com'
+                                    actions: {
+                                      // Update is allowed - proceed
+                                      Log_setting_source_of_authority: {
+                                        type: 'ApiConnection'
+                                        inputs: {
+                                          host: {
+                                            connection: {
+                                              name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                            }
+                                          }
+                                          method: 'post'
+                                          body: '@{json(concat(\'[{"EventType":"SettingSourceOfAuthority","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"false","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                          headers: {
+                                            'Log-Type': 'HybridUserSync'
+                                          }
+                                          path: '/api/logs'
+                                        }
+                                        runAfter: {}
                                       }
-                                      headers: {
-                                        'Content-Type': 'application/json'
-                                      }
-                                      body: {
-                                        isCloudManaged: true
-                                      }
-                                    }
-                                    runAfter: {
-                                      Log_setting_source_of_authority: ['Succeeded']
-                                    }
-                                  }
-                                  // Log successful source of authority change
-                                  Log_source_of_authority_success: {
-                                    type: 'ApiConnection'
-                                    inputs: {
-                                      host: {
-                                        connection: {
-                                          name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                      // Set source of authority to cloud (isCloudManaged=true)
+                                      Set_source_of_authority: {
+                                        type: 'Http'
+                                        inputs: {
+                                          method: 'PATCH'
+                                          uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
+                                          authentication: {
+                                            type: 'ManagedServiceIdentity'
+                                            audience: 'https://graph.microsoft.com'
+                                          }
+                                          headers: {
+                                            'Content-Type': 'application/json'
+                                          }
+                                          body: {
+                                            isCloudManaged: true
+                                          }
+                                        }
+                                        runAfter: {
+                                          Log_setting_source_of_authority: ['Succeeded']
                                         }
                                       }
-                                      method: 'post'
-                                      body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
-                                      headers: {
-                                        'Log-Type': 'HybridUserSync'
+                                      // Log successful source of authority change
+                                      Log_source_of_authority_success: {
+                                        type: 'ApiConnection'
+                                        inputs: {
+                                          host: {
+                                            connection: {
+                                              name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                            }
+                                          }
+                                          method: 'post'
+                                          body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                          headers: {
+                                            'Log-Type': 'HybridUserSync'
+                                          }
+                                          path: '/api/logs'
+                                        }
+                                        runAfter: {
+                                          Set_source_of_authority: ['Succeeded']
+                                        }
                                       }
-                                      path: '/api/logs'
                                     }
-                                    runAfter: {
-                                      Set_source_of_authority: ['Succeeded']
+                                    else: {
+                                      actions: {
+                                        // Update not allowed - log reason
+                                        Log_update_not_allowed: {
+                                          type: 'ApiConnection'
+                                          inputs: {
+                                            host: {
+                                              connection: {
+                                                name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                              }
+                                            }
+                                            method: 'post'
+                                            body: '@{json(concat(\'[{"EventType":"SourceOfAuthorityUpdateNotAllowed","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                            headers: {
+                                              'Log-Type': 'HybridUserSync'
+                                            }
+                                            path: '/api/logs'
+                                          }
+                                          runAfter: {}
+                                        }
+                                      }
                                     }
                                   }
                                 }
                                 else: {
                                   actions: {
-                                    // Source of authority update skipped - log reason
-                                    Log_source_of_authority_skipped: {
+                                    // isCloudManaged is already true - log and skip
+                                    Log_already_cloud_managed: {
                                       type: 'ApiConnection'
                                       inputs: {
                                         host: {
@@ -517,7 +546,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                           }
                                         }
                                         method: 'post'
-                                        body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySkipped","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"\',coalesce(string(body(\'Parse_sync_behavior\')?[\'isCloudManaged\']), \'null\'),\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                        body: '@{json(concat(\'[{"EventType":"AlreadyCloudManaged","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"true","Timestamp":"\',utcNow(),\'"}]\'))}'
                                         headers: {
                                           'Log-Type': 'HybridUserSync'
                                         }
