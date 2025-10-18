@@ -70,6 +70,14 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           defaultValue: deadLetterContainerName
           type: 'String'
         }
+        disableSourceOfAuthorityUpdate: {
+          defaultValue: false
+          type: 'Bool'
+        }
+        allowedAdminUnitNames: {
+          defaultValue: []
+          type: 'Array'
+        }
       }
       triggers: {
         manual: {
@@ -281,6 +289,37 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           Parse_user_details: ['Succeeded']
                         }
                       }
+                      // Get admin unit details for name check
+                      Get_admin_unit_details: {
+                        type: 'Http'
+                        inputs: {
+                          method: 'GET'
+                          uri: 'https://graph.microsoft.com/v1.0/directory/administrativeUnits/@{parameters(\'adminUnitId\')}?$select=id,displayName'
+                          authentication: {
+                            type: 'ManagedServiceIdentity'
+                            audience: 'https://graph.microsoft.com'
+                          }
+                        }
+                        runAfter: {
+                          Parse_user_details: ['Succeeded']
+                        }
+                      }
+                      Parse_admin_unit_details: {
+                        type: 'ParseJson'
+                        inputs: {
+                          content: '@body(\'Get_admin_unit_details\')'
+                          schema: {
+                            type: 'object'
+                            properties: {
+                              id: { type: 'string' }
+                              displayName: { type: 'string' }
+                            }
+                          }
+                        }
+                        runAfter: {
+                          Get_admin_unit_details: ['Succeeded']
+                        }
+                      }
                       Parse_admin_unit_response: {
                         type: 'ParseJson'
                         inputs: {
@@ -296,6 +335,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                         }
                         runAfter: {
                           Check_admin_unit_membership: ['Succeeded', 'Failed']
+                          Parse_admin_unit_details: ['Succeeded']
                         }
                       }
                       // Only proceed if user is in admin unit
@@ -346,9 +386,35 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               Check_if_cloud_managed: {
                                 type: 'If'
                                 expression: {
-                                  equals: [
-                                    '@coalesce(body(\'Parse_user_details\')?[\'onPremisesSyncBehavior\']?[\'isCloudManaged\'], false)'
-                                    false
+                                  and: [
+                                    {
+                                      equals: [
+                                        '@parameters(\'disableSourceOfAuthorityUpdate\')'
+                                        false
+                                      ]
+                                    }
+                                    {
+                                      equals: [
+                                        '@coalesce(body(\'Parse_user_details\')?[\'onPremisesSyncBehavior\']?[\'isCloudManaged\'], false)'
+                                        false
+                                      ]
+                                    }
+                                    {
+                                      or: [
+                                        {
+                                          equals: [
+                                            '@length(parameters(\'allowedAdminUnitNames\'))'
+                                            0
+                                          ]
+                                        }
+                                        {
+                                          contains: [
+                                            '@parameters(\'allowedAdminUnitNames\')'
+                                            '@body(\'Parse_admin_unit_details\')?[\'displayName\']'
+                                          ]
+                                        }
+                                      ]
+                                    }
                                   ]
                                 }
                                 actions: {
@@ -414,8 +480,8 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 }
                                 else: {
                                   actions: {
-                                    // isCloudManaged is already true - skip update
-                                    Log_source_of_authority_already_set: {
+                                    // Source of authority update skipped - log reason
+                                    Log_source_of_authority_skipped: {
                                       type: 'ApiConnection'
                                       inputs: {
                                         host: {
@@ -424,7 +490,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                           }
                                         }
                                         method: 'post'
-                                        body: '@{json(concat(\'[{"EventType":"SourceOfAuthorityAlreadySet","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"true","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                        body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySkipped","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"\',coalesce(string(body(\'Parse_user_details\')?[\'onPremisesSyncBehavior\']?[\'isCloudManaged\']), \'false\'),\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                         headers: {
                                           'Log-Type': 'HybridUserSync'
                                         }
