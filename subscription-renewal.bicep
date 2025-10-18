@@ -4,9 +4,6 @@ param location string
 @description('Name of the subscription renewal Logic App')
 param renewalLogicAppName string
 
-@description('Managed Identity Resource ID')
-param managedIdentityId string
-
 @description('Key Vault name')
 param keyVaultName string
 
@@ -33,10 +30,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   location: location
   tags: tags
   identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${managedIdentityId}': {}
-    }
+    type: 'SystemAssigned'
   }
   properties: {
     state: 'Enabled'
@@ -93,7 +87,6 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                 uri: 'https://@{parameters(\'keyVaultName\')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4'
                 authentication: {
                   type: 'ManagedServiceIdentity'
-                  identity: managedIdentityId
                   audience: 'https://vault.azure.net'
                 }
               }
@@ -158,7 +151,6 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                     uri: 'https://graph.microsoft.com/v1.0/subscriptions/@{variables(\'subscriptionId\')}'
                     authentication: {
                       type: 'ManagedServiceIdentity'
-                      identity: managedIdentityId
                       audience: 'https://graph.microsoft.com'
                     }
                     headers: {
@@ -228,7 +220,6 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                       uri: 'https://graph.microsoft.com/v1.0/subscriptions'
                       authentication: {
                         type: 'ManagedServiceIdentity'
-                        identity: managedIdentityId
                         audience: 'https://graph.microsoft.com'
                       }
                       headers: {
@@ -280,7 +271,6 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                       uri: 'https://@{parameters(\'keyVaultName\')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4'
                       authentication: {
                         type: 'ManagedServiceIdentity'
-                        identity: managedIdentityId
                         audience: 'https://vault.azure.net'
                       }
                       headers: {
@@ -405,3 +395,4 @@ resource renewalLogicAppDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-
 
 output renewalLogicAppId string = renewalLogicApp.id
 output renewalLogicAppName string = renewalLogicApp.name
+output renewalLogicAppPrincipalId string = renewalLogicApp.identity.principalId

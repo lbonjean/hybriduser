@@ -27,17 +27,9 @@ param tags object = {
 var resourcePrefix = 'hybriduser-${environmentName}'
 var keyVaultName = take('kv-${resourcePrefix}-${uniqueString(resourceGroup().id)}', 24)
 var logicAppName = 'logic-${resourcePrefix}'
-var managedIdentityName = 'id-${resourcePrefix}'
 var logAnalyticsName = 'log-${resourcePrefix}'
 var actionGroupName = 'ag-${resourcePrefix}'
 var deadLetterStorageName = take('stdl${environmentName}${uniqueString(resourceGroup().id)}', 24)
-
-// Managed Identity for Logic App
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: managedIdentityName
-  location: location
-  tags: tags
-}
 
 // Key Vault for storing subscription ID
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -58,17 +50,6 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       defaultAction: 'Allow'
       bypass: 'AzureServices'
     }
-  }
-}
-
-// Grant Key Vault Secrets Officer role to Managed Identity
-resource keyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, managedIdentity.id, 'Key Vault Secrets Officer')
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7') // Key Vault Secrets Officer
-    principalId: managedIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
   }
 }
 
@@ -99,17 +80,6 @@ resource deadLetterContainer 'Microsoft.Storage/storageAccounts/blobServices/con
   parent: deadLetterBlobService
   properties: {
     publicAccess: 'None'
-  }
-}
-
-// Grant Storage Blob Data Contributor to Managed Identity
-resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(deadLetterStorage.id, managedIdentity.id, 'Storage Blob Data Contributor')
-  scope: deadLetterStorage
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Contributor
-    principalId: managedIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
   }
 }
 
@@ -152,8 +122,6 @@ module logicApp 'logicapp.bicep' = {
   params: {
     location: location
     logicAppName: logicAppName
-    managedIdentityId: managedIdentity.id
-    managedIdentityPrincipalId: managedIdentity.properties.principalId
     keyVaultName: keyVault.name
     adminUnitId: adminUnitId
     provisioningApiEndpoint: provisioningApiEndpoint
@@ -164,10 +132,16 @@ module logicApp 'logicapp.bicep' = {
     logAnalyticsPrimaryKey: logAnalyticsWorkspaceKey
     tags: tags
   }
-  dependsOn: [
-    keyVaultRoleAssignment
-    storageRoleAssignment
-  ]
+}
+
+// Role assignments module for Logic App system-assigned identity
+module roleAssignments 'role-assignments.bicep' = {
+  name: 'role-assignments-deployment'
+  params: {
+    logicAppPrincipalId: logicApp.outputs.logicAppPrincipalId
+    keyVaultId: keyVault.id
+    deadLetterStorageId: deadLetterStorage.id
+  }
 }
 
 // Subscription Renewal Logic App
@@ -178,7 +152,6 @@ module subscriptionRenewal 'subscription-renewal.bicep' = {
   params: {
     location: location
     renewalLogicAppName: 'logic-${resourcePrefix}-renewal'
-    managedIdentityId: managedIdentity.id
     keyVaultName: keyVault.name
     webhookCallbackUrl: 'https://placeholder.com' // Will be updated by post-deployment script
     logAnalyticsWorkspaceId: logAnalytics.id
@@ -187,7 +160,7 @@ module subscriptionRenewal 'subscription-renewal.bicep' = {
     tags: tags
   }
   dependsOn: [
-    keyVaultRoleAssignment
+    roleAssignments
   ]
 }
 
@@ -210,8 +183,8 @@ module monitoring 'monitoring.bicep' = if (deployMonitoring) {
 output logicAppName string = logicAppName
 output renewalLogicAppName string = subscriptionRenewal.outputs.renewalLogicAppName
 output keyVaultName string = keyVault.name
-output managedIdentityPrincipalId string = managedIdentity.properties.principalId
-output managedIdentityClientId string = managedIdentity.properties.clientId
+output logicAppPrincipalId string = logicApp.outputs.logicAppPrincipalId
+output renewalLogicAppPrincipalId string = subscriptionRenewal.outputs.renewalLogicAppPrincipalId
 output deadLetterStorageAccountName string = deadLetterStorage.name
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output actionGroupName string = actionGroup.name

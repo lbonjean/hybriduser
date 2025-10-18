@@ -4,12 +4,6 @@ param location string
 @description('Name of the Logic App')
 param logicAppName string
 
-@description('Managed Identity Resource ID')
-param managedIdentityId string
-
-@description('Managed Identity Principal ID')
-param managedIdentityPrincipalId string
-
 @description('Key Vault name')
 param keyVaultName string
 
@@ -44,10 +38,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   location: location
   tags: tags
   identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${managedIdentityId}': {}
-    }
+    type: 'SystemAssigned'
   }
   properties: {
     state: 'Enabled'
@@ -220,10 +211,9 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                         type: 'Http'
                         inputs: {
                           method: 'GET'
-                          uri: 'https://graph.microsoft.com/v1.0/users/@{variables(\'userId\')}?$select=id,userPrincipalName,onPremisesImmutableId,onPremisesSyncEnabled,displayName'
+                          uri: 'https://graph.microsoft.com/v1.0/users/@{variables(\'userId\')}?$select=id,userPrincipalName,onPremisesImmutableId,onPremisesSyncEnabled,displayName,givenName,surname,mail,employeeId,department,companyName,jobTitle,mobilePhone,businessPhones'
                           authentication: {
                             type: 'ManagedServiceIdentity'
-                            identity: managedIdentityId
                             audience: 'https://graph.microsoft.com'
                           }
                         }
@@ -257,7 +247,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           uri: 'https://graph.microsoft.com/v1.0/directory/administrativeUnits/@{parameters(\'adminUnitId\')}/members?$filter=id eq \'@{variables(\'userId\')}\''
                           authentication: {
                             type: 'ManagedServiceIdentity'
-                            identity: managedIdentityId
                             audience: 'https://graph.microsoft.com'
                           }
                         }
@@ -370,18 +359,52 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                   uri: '@{parameters(\'provisioningApiEndpoint\')}'
                                   authentication: {
                                     type: 'ManagedServiceIdentity'
-                                    identity: managedIdentityId
                                     audience: 'https://graph.microsoft.com'
                                   }
                                   headers: {
-                                    'Content-Type': 'application/json'
+                                    'Content-Type': 'application/scim+json'
                                   }
                                   body: {
-                                    id: '@{variables(\'userId\')}'
-                                    userPrincipalName: '@{body(\'Parse_user_details\')?[\'userPrincipalName\']}'
-                                    displayName: '@{body(\'Parse_user_details\')?[\'displayName\']}'
+                                    schemas: [
+                                      'urn:ietf:params:scim:api:messages:2.0:BulkRequest'
+                                    ]
+                                    Operations: [
+                                      {
+                                        method: 'POST'
+                                        bulkId: '@{guid()}'
+                                        path: '/Users'
+                                        data: {
+                                          schemas: [
+                                            'urn:ietf:params:scim:schemas:core:2.0:User'
+                                            'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User'
+                                          ]
+                                          externalId: '@{if(empty(body(\'Parse_user_details\')?[\'employeeId\']), utcNow(\'yyyyMMddHHmmss\'), body(\'Parse_user_details\')?[\'employeeId\'])}'
+                                          userName: '@{body(\'Parse_user_details\')?[\'userPrincipalName\']}'
+                                          name: {
+                                            givenName: '@{body(\'Parse_user_details\')?[\'givenName\']}'
+                                            familyName: '@{body(\'Parse_user_details\')?[\'surname\']}'
+                                          }
+                                          displayName: '@{body(\'Parse_user_details\')?[\'displayName\']}'
+                                          emails: [
+                                            {
+                                              value: '@{coalesce(body(\'Parse_user_details\')?[\'mail\'], body(\'Parse_user_details\')?[\'userPrincipalName\'])}'
+                                              type: 'work'
+                                              primary: true
+                                            }
+                                          ]
+                                          active: true
+                                          'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User': {
+                                            employeeNumber: '@{body(\'Parse_user_details\')?[\'employeeId\']}'
+                                            department: '@{body(\'Parse_user_details\')?[\'department\']}'
+                                            organization: '@{body(\'Parse_user_details\')?[\'companyName\']}'
+                                          }
+                                        }
+                                      }
+                                    ]
+                                    failOnErrors: null
                                   }
                                 }
+                                operationOptions: 'DisableAsyncPattern'
                                 runAfter: {
                                   Log_provisioning_start: ['Succeeded']
                                 }
@@ -435,7 +458,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                     uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
                                     authentication: {
                                       type: 'ManagedServiceIdentity'
-                                      identity: managedIdentityId
                                       audience: 'https://graph.microsoft.com'
                                     }
                                     headers: {
@@ -540,7 +562,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           uri: 'https://@{parameters(\'deadLetterStorageAccount\')}.blob.core.windows.net/@{parameters(\'deadLetterContainer\')}/@{utcNow(\'yyyy-MM-dd_HHmmss\')}_@{variables(\'userId\')}.json'
                           authentication: {
                             type: 'ManagedServiceIdentity'
-                            identity: managedIdentityId
                             audience: 'https://storage.azure.com/'
                           }
                           headers: {
@@ -662,4 +683,4 @@ resource logicAppDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
 }
 
 output logicAppId string = logicApp.id
-output managedIdentityPrincipalId string = managedIdentityPrincipalId
+output logicAppPrincipalId string = logicApp.identity.principalId
