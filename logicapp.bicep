@@ -266,6 +266,14 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                             audience: 'https://graph.microsoft.com'
                           }
                         }
+                        runtimeConfiguration: {
+                          staticResult: {
+                            staticResultOptions: 'Disabled'
+                          }
+                          contentTransfer: {
+                            transferMode: 'Chunked'
+                          }
+                        }
                         runAfter: {
                           Parse_user_details: ['Succeeded']
                         }
@@ -273,7 +281,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                       Parse_admin_unit_response: {
                         type: 'ParseJson'
                         inputs: {
-                          content: '@body(\'Check_admin_unit_membership\')'
+                          content: '@if(equals(outputs(\'Check_admin_unit_membership\')?[\'statusCode\'], 404), json(\'{"value":[]}\'), body(\'Check_admin_unit_membership\'))'
                           schema: {
                             type: 'object'
                             properties: {
@@ -284,7 +292,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           }
                         }
                         runAfter: {
-                          Check_admin_unit_membership: ['Succeeded']
+                          Check_admin_unit_membership: ['Succeeded', 'Failed']
                         }
                       }
                       // Only proceed if user is in admin unit
