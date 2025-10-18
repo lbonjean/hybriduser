@@ -28,3 +28,14 @@ resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
     principalType: 'ServicePrincipal'
   }
 }
+
+// Grant Storage Table Data Contributor to Logic App System-Assigned Identity
+resource storageTableRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(deadLetterStorageId, logicAppPrincipalId, 'Storage Table Data Contributor')
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3') // Storage Table Data Contributor
+    principalId: logicAppPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
