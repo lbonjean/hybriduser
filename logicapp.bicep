@@ -235,7 +235,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                         type: 'Http'
                         inputs: {
                           method: 'GET'
-                          uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}?$select=id,userPrincipalName,onPremisesImmutableId,onPremisesSyncEnabled,displayName,givenName,surname,mail,employeeId,department,companyName,jobTitle,mobilePhone,businessPhones,onPremisesSyncBehavior'
+                          uri: 'https://graph.microsoft.com/v1.0/users/@{variables(\'userId\')}?$select=id,userPrincipalName,onPremisesImmutableId,onPremisesSyncEnabled,displayName,givenName,surname,mail,employeeId,department,companyName,jobTitle,mobilePhone,businessPhones'
                           authentication: {
                             type: 'ManagedServiceIdentity'
                             audience: 'https://graph.microsoft.com'
@@ -256,12 +256,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               displayName: { type: 'string' }
                               onPremisesImmutableId: { type: ['string', 'null'] }
                               onPremisesSyncEnabled: { type: ['boolean', 'null'] }
-                              onPremisesSyncBehavior: { 
-                                type: ['object', 'null']
-                                properties: {
-                                  isCloudManaged: { type: ['boolean', 'null'] }
-                                }
-                              }
                             }
                           }
                         }
@@ -382,7 +376,35 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               }
                             }
                             actions: {
-                              // User IS hybrid - check if source of authority needs updating
+                              // User IS hybrid - get current source of authority status
+                              Get_sync_behavior: {
+                                type: 'Http'
+                                inputs: {
+                                  method: 'GET'
+                                  uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
+                                  authentication: {
+                                    type: 'ManagedServiceIdentity'
+                                    audience: 'https://graph.microsoft.com'
+                                  }
+                                }
+                                runAfter: {}
+                              }
+                              Parse_sync_behavior: {
+                                type: 'ParseJson'
+                                inputs: {
+                                  content: '@body(\'Get_sync_behavior\')'
+                                  schema: {
+                                    type: 'object'
+                                    properties: {
+                                      isCloudManaged: { type: ['boolean', 'null'] }
+                                    }
+                                  }
+                                }
+                                runAfter: {
+                                  Get_sync_behavior: ['Succeeded']
+                                }
+                              }
+                              // Check if source of authority needs updating
                               Check_if_cloud_managed: {
                                 type: 'If'
                                 expression: {
@@ -394,10 +416,12 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                       ]
                                     }
                                     {
-                                      equals: [
-                                        '@coalesce(body(\'Parse_user_details\')?[\'onPremisesSyncBehavior\']?[\'isCloudManaged\'], false)'
-                                        false
-                                      ]
+                                      not: {
+                                        equals: [
+                                          '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
+                                          true
+                                        ]
+                                      }
                                     }
                                     {
                                       or: [
@@ -416,6 +440,9 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                       ]
                                     }
                                   ]
+                                }
+                                runAfter: {
+                                  Parse_sync_behavior: ['Succeeded']
                                 }
                                 actions: {
                                   // isCloudManaged is false - needs update
@@ -490,7 +517,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                           }
                                         }
                                         method: 'post'
-                                        body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySkipped","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"\',coalesce(string(body(\'Parse_user_details\')?[\'onPremisesSyncBehavior\']?[\'isCloudManaged\']), \'false\'),\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                        body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySkipped","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"\',coalesce(string(body(\'Parse_sync_behavior\')?[\'isCloudManaged\']), \'null\'),\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                         headers: {
                                           'Log-Type': 'HybridUserSync'
                                         }
@@ -500,7 +527,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                     }
                                   }
                                 }
-                                runAfter: {}
                               }
                             }
                             else: {
