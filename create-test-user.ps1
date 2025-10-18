@@ -21,8 +21,34 @@ $displayName = "Test User $timestamp"
 $userPrincipalName = "$userName$Domain"
 $password = (New-Guid).ToString()
 
-# Get the admin unit ID first
-Write-Host "Finding admin unit '$AdminUnitName'..." -ForegroundColor Cyan
+Write-Host "Creating test user..." -ForegroundColor Cyan
+Write-Host "  Display Name: $displayName" -ForegroundColor Gray
+Write-Host "  UPN: $userPrincipalName" -ForegroundColor Gray
+Write-Host "  Password: $password" -ForegroundColor Yellow
+
+# Create the user
+try {
+    $user = az ad user create `
+        --display-name $displayName `
+        --user-principal-name $userPrincipalName `
+        --password $password `
+        --mail-nickname $userName `
+        --force-change-password-next-sign-in false | ConvertFrom-Json
+    
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create user"
+    }
+    
+    $userId = $user.id
+    Write-Host "✅ User created with ID: $userId" -ForegroundColor Green
+    
+} catch {
+    Write-Error "Failed to create user: $_"
+    exit 1
+}
+
+# Get the admin unit ID
+Write-Host "`nFinding admin unit '$AdminUnitName'..." -ForegroundColor Cyan
 try {
     $adminUnits = az rest `
         --method GET `
@@ -33,8 +59,12 @@ try {
     }
     
     if ($adminUnits.value.Count -eq 0) {
-        Write-Error "Admin unit '$AdminUnitName' not found. Cannot create user without admin unit."
-        exit 1
+        Write-Warning "Admin unit '$AdminUnitName' not found. User created but not added to admin unit."
+        Write-Host "`nUser Details:" -ForegroundColor Yellow
+        Write-Host "  ID: $userId"
+        Write-Host "  UPN: $userPrincipalName"
+        Write-Host "  Password: $password"
+        exit 0
     }
     
     $adminUnitId = $adminUnits.value[0].id
@@ -42,47 +72,39 @@ try {
     
 } catch {
     Write-Error "Failed to find admin unit: $_"
+    Write-Host "`nUser Details:" -ForegroundColor Yellow
+    Write-Host "  ID: $userId"
+    Write-Host "  UPN: $userPrincipalName"
+    Write-Host "  Password: $password"
     exit 1
 }
 
-# Create the user directly in the admin unit via Graph API
-Write-Host "`nCreating test user in admin unit..." -ForegroundColor Cyan
-Write-Host "  Display Name: $displayName" -ForegroundColor Gray
-Write-Host "  UPN: $userPrincipalName" -ForegroundColor Gray
-Write-Host "  Password: $password" -ForegroundColor Yellow
-
+# Add user to admin unit
+Write-Host "`nAdding user to admin unit..." -ForegroundColor Cyan
 try {
     # Use temp file to avoid escaping issues
     $tempFile = [System.IO.Path]::GetTempFileName()
     @{
-        accountEnabled = $true
-        displayName = $displayName
-        mailNickname = $userName
-        userPrincipalName = $userPrincipalName
-        passwordProfile = @{
-            forceChangePasswordNextSignIn = $false
-            password = $password
-        }
+        "@odata.id" = "https://graph.microsoft.com/v1.0/users/$userId"
     } | ConvertTo-Json | Out-File -FilePath $tempFile -Encoding utf8 -NoNewline
     
-    $user = az rest `
+    $result = az rest `
         --method POST `
-        --uri "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$adminUnitId/members" `
+        --uri "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$adminUnitId/members/`$ref" `
         --body "@$tempFile" `
-        --headers "Content-Type=application/json" | ConvertFrom-Json
+        --headers "Content-Type=application/json" 2>&1
     
     Remove-Item $tempFile -ErrorAction SilentlyContinue
     
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create user in admin unit"
+        throw "Failed to add user to admin unit: $result"
     }
     
-    $userId = $user.id
-    Write-Host "✅ User created in admin unit with ID: $userId" -ForegroundColor Green
+    Write-Host "✅ User added to admin unit" -ForegroundColor Green
     
 } catch {
-    Write-Error "Failed to create user in admin unit: $_"
-    exit 1
+    Write-Error "Failed to add user to admin unit: $_"
+    Write-Host "`nUser created but not in admin unit. You may need to add manually." -ForegroundColor Yellow
 }
 
 # Summary
