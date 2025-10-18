@@ -1,0 +1,38 @@
+{
+  "failOnErrors": null,
+  "Operations": [
+    {
+      "bulkId": "3a90a9d2-12b6-4b8c-8731-8e7777450aa5",
+      "data": {
+        "name": {
+          "givenName": "Test-20251018-003",
+          "familyName": "Test-20251018-003"
+        },
+        "active": true,
+        "displayName": "Test-20251018-003",
+        "nickName": "Test-20251018-003",
+        "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+          "employeeNumber": "789654"
+        },
+        "emails": [
+          {
+            "value": "Test-20251018-003@bas-services.nl",
+            "type": "work",
+            "primary": true
+          }
+        ],
+        "schemas": [
+          "urn:ietf:params:scim:schemas:core:2.0:User",
+          "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+        ],
+        "externalId": "789654",
+        "userName": "Test-20251018-003@bas-services.nl"
+      },
+      "method": "POST",
+      "path": "/Users"
+    }
+  ],
+  "schemas": [
+    "urn:ietf:params:scim:api:messages:2.0:BulkRequest"
+  ]
+}

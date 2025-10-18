@@ -1,0 +1,733 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "actions": {
+    "Check_if_validation_request": {
+      "actions": {
+        "Return_validation_token": {
+          "inputs": {
+            "body": "@{trigger()['outputs']?['queries']?['validationToken']}",
+            "headers": {
+              "Content-Type": "text/plain"
+            },
+            "statusCode": 200
+          },
+          "kind": "Http",
+          "type": "Response"
+        }
+      },
+      "else": {
+        "actions": {
+          "For_each_notification": {
+            "actions": {
+              "Process_user_error_handler": {
+                "actions": {
+                  "Compose_error_details": {
+                    "inputs": {
+                      "error": "@{result('Process_user_scope')}",
+                      "notification": "@{items('For_each_notification')}",
+                      "timestamp": "@{utcNow()}",
+                      "userId": "@{variables('userId')}"
+                    },
+                    "runAfter": {
+                      "Set_error_flag": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "Compose"
+                  },
+                  "Log_error": {
+                    "inputs": {
+                      "body": "@{json(concat('[{\"EventType\":\"ProcessingError\",\"UserId\":\"',variables('userId'),'\",\"ErrorDetails\":\"',base64(string(result('Process_user_scope'))),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                      "headers": {
+                        "Log-Type": "HybridUserSync"
+                      },
+                      "host": {
+                        "connection": {
+                          "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                        }
+                      },
+                      "method": "post",
+                      "path": "/api/logs"
+                    },
+                    "runAfter": {
+                      "Write_to_dead_letter": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "ApiConnection"
+                  },
+                  "Set_error_flag": {
+                    "inputs": {
+                      "name": "hasError",
+                      "value": true
+                    },
+                    "runAfter": {},
+                    "type": "SetVariable"
+                  },
+                  "Write_to_dead_letter": {
+                    "inputs": {
+                      "authentication": {
+                        "audience": "https://storage.azure.com/",
+                        "type": "ManagedServiceIdentity"
+                      },
+                      "body": "@outputs('Compose_error_details')",
+                      "headers": {
+                        "Content-Type": "application/json",
+                        "x-ms-blob-type": "BlockBlob"
+                      },
+                      "method": "PUT",
+                      "uri": "https://@{parameters('deadLetterStorageAccount')}.blob.core.windows.net/@{parameters('deadLetterContainer')}/@{utcNow('yyyy-MM-dd_HHmmss')}_@{variables('userId')}.json"
+                    },
+                    "runAfter": {
+                      "Compose_error_details": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "Http"
+                  }
+                },
+                "runAfter": {
+                  "Process_user_scope": [
+                    "Failed",
+                    "Skipped",
+                    "TimedOut"
+                  ]
+                },
+                "type": "Scope"
+              },
+              "Process_user_scope": {
+                "actions": {
+                  "Check_admin_unit_membership": {
+                    "inputs": {
+                      "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                      },
+                      "method": "GET",
+                      "uri": "https://graph.microsoft.com/v1.0/directory/administrativeUnits/@{parameters('adminUnitId')}/members?$filter=id eq '@{variables('userId')}'"
+                    },
+                    "runAfter": {
+                      "Parse_user_details": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "Http"
+                  },
+                  "Check_if_in_admin_unit": {
+                    "actions": {
+                      "Check_if_hybrid": {
+                        "actions": {
+                          "Log_provisioning_start": {
+                            "inputs": {
+                              "body": "@{json(concat('[{\"EventType\":\"ProvisioningStarted\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                              "headers": {
+                                "Log-Type": "HybridUserSync"
+                              },
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                }
+                              },
+                              "method": "post",
+                              "path": "/api/logs"
+                            },
+                            "runAfter": {},
+                            "type": "ApiConnection"
+                          },
+                          "Log_provisioning_success": {
+                            "inputs": {
+                              "body": "@{json(concat('[{\"EventType\":\"ProvisioningSuccess\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                              "headers": {
+                                "Log-Type": "HybridUserSync"
+                              },
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                }
+                              },
+                              "method": "post",
+                              "path": "/api/logs"
+                            },
+                            "runAfter": {
+                              "Provision_user_to_ADDS": [
+                                "Succeeded"
+                              ]
+                            },
+                            "type": "ApiConnection"
+                          },
+                          "Provision_user_to_ADDS": {
+                            "inputs": {
+                              "authentication": {
+                                "audience": "https://graph.microsoft.com",
+                                "type": "ManagedServiceIdentity"
+                              },
+                              "body": {
+                                "Operations": [
+                                  {
+                                    "bulkId": "@{guid()}",
+                                    "data": {
+                                      "active": true,
+                                      "displayName": "@{body('Parse_user_details')?['displayName']}",
+                                      "emails": [
+                                        {
+                                          "primary": true,
+                                          "type": "work",
+                                          "value": "@{if(empty(body('Parse_user_details')?['mail']), body('Parse_user_details')?['userPrincipalName'], body('Parse_user_details')?['mail'])}"
+                                        }
+                                      ],
+                                      "externalId": "@{if(empty(body('Parse_user_details')?['employeeId']), utcNow('yyyyMMddHHmmss'), body('Parse_user_details')?['employeeId'])}",
+                                      "locale": "@{body('Parse_user_details')?['usageLocation']}",
+                                      "name": {
+                                        "familyName": "@{body('Parse_user_details')?['surname']}",
+                                        "givenName": "@{body('Parse_user_details')?['givenName']}"
+                                      },
+                                      "nickName": "@{body('Parse_user_details')?['mailNickname']}",
+                                      "preferredLanguage": "@{body('Parse_user_details')?['preferredLanguage']}",
+                                      "schemas": [
+                                        "urn:ietf:params:scim:schemas:core:2.0:User",
+                                        "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+                                      ],
+                                      "title": "@{body('Parse_user_details')?['jobTitle']}",
+                                      "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+                                        "department": "@{body('Parse_user_details')?['department']}",
+                                        "employeeNumber": "@{body('Parse_user_details')?['employeeId']}",
+                                        "organization": "@{body('Parse_user_details')?['companyName']}"
+                                      },
+                                      "userName": "@{body('Parse_user_details')?['userPrincipalName']}"
+                                    },
+                                    "method": "POST",
+                                    "path": "/Users"
+                                  }
+                                ],
+                                "failOnErrors": null,
+                                "schemas": [
+                                  "urn:ietf:params:scim:api:messages:2.0:BulkRequest"
+                                ]
+                              },
+                              "headers": {
+                                "Content-Type": "application/scim+json"
+                              },
+                              "method": "POST",
+                              "uri": "@{parameters('provisioningApiEndpoint')}"
+                            },
+                            "operationOptions": "DisableAsyncPattern",
+                            "runAfter": {
+                              "Log_provisioning_start": [
+                                "Succeeded"
+                              ]
+                            },
+                            "type": "Http"
+                          }
+                        },
+                        "else": {
+                          "actions": {
+                            "Log_setting_source_of_authority": {
+                              "inputs": {
+                                "body": "@{json(concat('[{\"EventType\":\"SettingSourceOfAuthority\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"ImmutableId\":\"',body('Parse_user_details')?['onPremisesImmutableId'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                "headers": {
+                                  "Log-Type": "HybridUserSync"
+                                },
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "path": "/api/logs"
+                              },
+                              "runAfter": {},
+                              "type": "ApiConnection"
+                            },
+                            "Log_source_of_authority_success": {
+                              "inputs": {
+                                "body": "@{json(concat('[{\"EventType\":\"SourceOfAuthoritySuccess\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                "headers": {
+                                  "Log-Type": "HybridUserSync"
+                                },
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "path": "/api/logs"
+                              },
+                              "runAfter": {
+                                "Set_source_of_authority": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "ApiConnection"
+                            },
+                            "Set_source_of_authority": {
+                              "inputs": {
+                                "authentication": {
+                                  "audience": "https://graph.microsoft.com",
+                                  "type": "ManagedServiceIdentity"
+                                },
+                                "body": {
+                                  "@@odata.type": "microsoft.graph.onPremisesDirectorySynchronization",
+                                  "synchronizationBehavior": "cloudMastered"
+                                },
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "method": "PUT",
+                                "uri": "https://graph.microsoft.com/beta/users/@{variables('userId')}/onPremisesSyncBehavior"
+                              },
+                              "runAfter": {
+                                "Log_setting_source_of_authority": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Http"
+                            }
+                          }
+                        },
+                        "expression": {
+                          "and": [
+                            {
+                              "equals": [
+                                "@body('Parse_user_details')?['onPremisesImmutableId']",
+                                null
+                              ]
+                            },
+                            {
+                              "or": [
+                                {
+                                  "equals": [
+                                    "@body('Parse_user_details')?['onPremisesSyncEnabled']",
+                                    false
+                                  ]
+                                },
+                                {
+                                  "equals": [
+                                    "@body('Parse_user_details')?['onPremisesSyncEnabled']",
+                                    null
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "runAfter": {
+                          "Log_user_in_admin_unit": [
+                            "Succeeded"
+                          ]
+                        },
+                        "type": "If"
+                      },
+                      "Log_user_in_admin_unit": {
+                        "inputs": {
+                          "body": "@{json(concat('[{\"EventType\":\"UserInAdminUnit\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"AdminUnitId\":\"',parameters('adminUnitId'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                          "headers": {
+                            "Log-Type": "HybridUserSync"
+                          },
+                          "host": {
+                            "connection": {
+                              "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                            }
+                          },
+                          "method": "post",
+                          "path": "/api/logs"
+                        },
+                        "runAfter": {},
+                        "type": "ApiConnection"
+                      }
+                    },
+                    "else": {
+                      "actions": {
+                        "Log_user_not_in_admin_unit": {
+                          "inputs": {
+                            "body": "@{json(concat('[{\"EventType\":\"UserNotInAdminUnit\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"AdminUnitId\":\"',parameters('adminUnitId'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                            "headers": {
+                              "Log-Type": "HybridUserSync"
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$$connections')['azureloganalyticsdatacollector']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "/api/logs"
+                          },
+                          "runAfter": {},
+                          "type": "ApiConnection"
+                        }
+                      }
+                    },
+                    "expression": {
+                      "and": [
+                        {
+                          "greater": [
+                            "@length(body('Parse_admin_unit_response')?['value'])",
+                            0
+                          ]
+                        }
+                      ]
+                    },
+                    "runAfter": {
+                      "Parse_admin_unit_response": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "If"
+                  },
+                  "Get_user_details": {
+                    "inputs": {
+                      "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                      },
+                      "method": "GET",
+                      "uri": "https://graph.microsoft.com/v1.0/users/@{variables('userId')}?$select=id,userPrincipalName,displayName,givenName,surname,mail,mailNickname,jobTitle,department,companyName,businessPhones,mobilePhone,preferredLanguage,usageLocation,employeeId,city,country,postalCode,state,streetAddress,officeLocation,onPremisesImmutableId,onPremisesSyncEnabled"
+                    },
+                    "runAfter": {},
+                    "type": "Http"
+                  },
+                  "Parse_admin_unit_response": {
+                    "inputs": {
+                      "content": "@body('Check_admin_unit_membership')",
+                      "schema": {
+                        "properties": {
+                          "value": {
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "runAfter": {
+                      "Check_admin_unit_membership": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "ParseJson"
+                  },
+                  "Parse_user_details": {
+                    "inputs": {
+                      "content": "@body('Get_user_details')",
+                      "schema": {
+                        "properties": {
+                          "businessPhones": {
+                            "type": [
+                              "array",
+                              "null"
+                            ]
+                          },
+                          "city": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "companyName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "country": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "department": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "employeeId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "givenName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "jobTitle": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "mail": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "mailNickname": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "mobilePhone": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "officeLocation": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "onPremisesImmutableId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "onPremisesSyncEnabled": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "postalCode": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "preferredLanguage": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "state": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "streetAddress": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "surname": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "usageLocation": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "userPrincipalName": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "runAfter": {
+                      "Get_user_details": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "ParseJson"
+                  }
+                },
+                "runAfter": {
+                  "Set_user_id": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "Scope"
+              },
+              "Set_user_id": {
+                "inputs": {
+                  "name": "userId",
+                  "value": "@{last(split(items('For_each_notification')?['resource'], '/'))}"
+                },
+                "runAfter": {},
+                "type": "SetVariable"
+              }
+            },
+            "foreach": "@triggerBody()?['value']",
+            "runAfter": {},
+            "type": "Foreach"
+          },
+          "Return_success_response": {
+            "inputs": {
+              "body": {
+                "hasErrors": "@variables('hasError')",
+                "processedCount": "@length(triggerBody()?['value'])",
+                "status": "accepted"
+              },
+              "headers": {
+                "Content-Type": "application/json"
+              },
+              "statusCode": 202
+            },
+            "kind": "Http",
+            "runAfter": {
+              "For_each_notification": [
+                "Succeeded",
+                "Failed"
+              ]
+            },
+            "type": "Response"
+          }
+        }
+      },
+      "expression": {
+        "and": [
+          {
+            "not": {
+              "equals": [
+                "@trigger()['outputs']?['queries']?['validationToken']",
+                null
+              ]
+            }
+          }
+        ]
+      },
+      "runAfter": {
+        "Initialize_user_id": [
+          "Succeeded"
+        ]
+      },
+      "type": "If"
+    },
+    "Initialize_error_message": {
+      "inputs": {
+        "variables": [
+          {
+            "name": "errorMessage",
+            "type": "string",
+            "value": ""
+          }
+        ]
+      },
+      "runAfter": {
+        "Initialize_error_variable": [
+          "Succeeded"
+        ]
+      },
+      "type": "InitializeVariable"
+    },
+    "Initialize_error_variable": {
+      "inputs": {
+        "variables": [
+          {
+            "name": "hasError",
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      },
+      "runAfter": {},
+      "type": "InitializeVariable"
+    },
+    "Initialize_user_id": {
+      "inputs": {
+        "variables": [
+          {
+            "name": "userId",
+            "type": "string",
+            "value": ""
+          }
+        ]
+      },
+      "runAfter": {
+        "Initialize_error_message": [
+          "Succeeded"
+        ]
+      },
+      "type": "InitializeVariable"
+    }
+  },
+  "contentVersion": "1.0.0.0",
+  "outputs": {},
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    },
+    "adminUnitId": {
+      "defaultValue": "1d1c8021-04ab-4015-a2b7-5aa5d8599b4d",
+      "type": "String"
+    },
+    "deadLetterContainer": {
+      "defaultValue": "deadletter",
+      "type": "String"
+    },
+    "deadLetterStorageAccount": {
+      "defaultValue": "stdldevvnyq5jyomsvf4",
+      "type": "String"
+    },
+    "keyVaultName": {
+      "defaultValue": "kv-hybriduser-dev-vnyq5j",
+      "type": "String"
+    },
+    "provisioningApiEndpoint": {
+      "defaultValue": "https://graph.microsoft.com/v1.0/servicePrincipals/7c1305ba-d291-4d86-8612-ea6809db8b18/synchronization/jobs/API2AD.f8b0f1b26abf433f8786597a6821a59c.b067346d-20bc-4b2f-b382-99abd375ade0/bulkUpload",
+      "type": "String"
+    }
+  },
+  "triggers": {
+    "manual": {
+      "inputs": {
+        "schema": {
+          "properties": {
+            "validationToken": {
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "properties": {
+                  "clientState": {
+                    "type": "string"
+                  },
+                  "expirationDateTime": {
+                    "type": "string"
+                  },
+                  "resource": {
+                    "type": "string"
+                  },
+                  "resourceData": {
+                    "type": "object"
+                  },
+                  "subscriptionId": {
+                    "type": "string"
+                  },
+                  "tenantId": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "kind": "Http",
+      "type": "Request"
+    }
+  }
+}
