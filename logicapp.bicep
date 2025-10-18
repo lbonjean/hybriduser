@@ -489,7 +489,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               inputs: {
                                 host: {
                                   connection: {
-                                    name: '@parameters(\'$$connections\')[\'azureloganalyticsdatacollector\')[\'connectionId\']'
+                                    name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
                                   }
                                 }
                                 method: 'post'
