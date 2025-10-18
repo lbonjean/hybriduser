@@ -267,9 +267,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           }
                         }
                         runtimeConfiguration: {
-                          staticResult: {
-                            staticResultOptions: 'Disabled'
-                          }
                           contentTransfer: {
                             transferMode: 'Chunked'
                           }
