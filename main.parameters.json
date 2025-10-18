@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "westeurope"
+    },
+    "environmentName": {
+      "value": "dev"
+    },
+    "adminUnitId": {
+      "value": "1d1c8021-04ab-4015-a2b7-5aa5d8599b4d"
+    },
+    "provisioningApiEndpoint": {
+      "value": "https://graph.microsoft.com/v1.0/servicePrincipals/7c1305ba-d291-4d86-8612-ea6809db8b18/synchronization/jobs/API2AD.f8b0f1b26abf433f8786597a6821a59c.b067346d-20bc-4b2f-b382-99abd375ade0/bulkUpload"
+    },
+    "alertEmailAddresses": {
+      "value": [
+        "luc@lubon.be"
+      ]
+    },
+    "deployMonitoring": {
+      "value": false
+    },
+    "tags": {
+      "value": {
+        "Environment": "dev",
+        "Application": "HybridUserSync",
+        "ManagedBy": "Bicep",
+        "CostCenter": "IT"
+      }
+    }
+  }
+}

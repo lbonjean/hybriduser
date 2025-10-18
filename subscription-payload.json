@@ -1,0 +1,7 @@
+{
+  "changeType": "updated",
+  "notificationUrl": "https://prod-162.westeurope.logic.azure.com:443/workflows/a5f871d2c7354271bc24ee69712ab2fc/triggers/manual/paths/invoke?api-version=2018-07-01-preview&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=iDyoecw4KxmGAm4CY7EaNUPak_kUE-bM_rJkWNM4938",
+  "resource": "/users",
+  "expirationDateTime": "2025-10-20T20:09:00.0000000Z",
+  "clientState": "HybridUserSync"
+}

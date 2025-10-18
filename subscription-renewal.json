@@ -1,0 +1,475 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.36.1.42791",
+      "templateHash": "3762970137952715853"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Location for the Logic App"
+      }
+    },
+    "renewalLogicAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the subscription renewal Logic App"
+      }
+    },
+    "managedIdentityId": {
+      "type": "string",
+      "metadata": {
+        "description": "Managed Identity Resource ID"
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Key Vault name"
+      }
+    },
+    "webhookCallbackUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Main Logic App callback URL"
+      }
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics Workspace ID"
+      }
+    },
+    "logAnalyticsCustomerId": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics Workspace Customer ID (GUID)"
+      }
+    },
+    "logAnalyticsPrimaryKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Log Analytics Workspace Primary Shared Key"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "metadata": {
+        "description": "Tags"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('renewalLogicAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('managedIdentityId'))]": {}
+        }
+      },
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            },
+            "keyVaultName": {
+              "defaultValue": "[parameters('keyVaultName')]",
+              "type": "String"
+            },
+            "webhookCallbackUrl": {
+              "defaultValue": "[parameters('webhookCallbackUrl')]",
+              "type": "String"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Hour",
+                "interval": 36
+              }
+            }
+          },
+          "actions": {
+            "Initialize_subscription_id": {
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "subscriptionId",
+                    "type": "string",
+                    "value": ""
+                  }
+                ]
+              },
+              "runAfter": {}
+            },
+            "Renewal_scope": {
+              "type": "Scope",
+              "actions": {
+                "Get_subscription_id_from_keyvault": {
+                  "type": "Http",
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "https://@{parameters('keyVaultName')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "identity": "[parameters('managedIdentityId')]",
+                      "audience": "https://vault.azure.net"
+                    }
+                  },
+                  "runAfter": {}
+                },
+                "Parse_keyvault_response": {
+                  "type": "ParseJson",
+                  "inputs": {
+                    "content": "@body('Get_subscription_id_from_keyvault')",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_subscription_id_from_keyvault": [
+                      "Succeeded"
+                    ]
+                  }
+                },
+                "Check_if_subscription_exists": {
+                  "type": "If",
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@actions('Get_subscription_id_from_keyvault').status",
+                          "Succeeded"
+                        ]
+                      }
+                    ]
+                  },
+                  "runAfter": {
+                    "Parse_keyvault_response": [
+                      "Succeeded",
+                      "Skipped"
+                    ]
+                  },
+                  "actions": {
+                    "Set_subscription_id": {
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "subscriptionId",
+                        "value": "@body('Parse_keyvault_response')?['value']"
+                      },
+                      "runAfter": {}
+                    },
+                    "Calculate_expiration": {
+                      "type": "Compose",
+                      "inputs": "@addDays(utcNow(), 3)",
+                      "runAfter": {
+                        "Set_subscription_id": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Renew_subscription": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "PATCH",
+                        "uri": "https://graph.microsoft.com/v1.0/subscriptions/@{variables('subscriptionId')}",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "identity": "[parameters('managedIdentityId')]",
+                          "audience": "https://graph.microsoft.com"
+                        },
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "body": {
+                          "expirationDateTime": "@{outputs('Calculate_expiration')}"
+                        }
+                      },
+                      "runAfter": {
+                        "Calculate_expiration": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Log_renewal_success": {
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                          }
+                        },
+                        "method": "post",
+                        "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalSuccess\",\"SubscriptionId\":\"',variables('subscriptionId'),'\",\"NewExpiration\":\"',outputs('Calculate_expiration'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                        "headers": {
+                          "Log-Type": "HybridUserSync"
+                        },
+                        "path": "/api/logs"
+                      },
+                      "runAfter": {
+                        "Renew_subscription": [
+                          "Succeeded"
+                        ]
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Log_creating_new_subscription": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                          "host": {
+                            "connection": {
+                              "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                            }
+                          },
+                          "method": "post",
+                          "body": "@{json(concat('[{\"EventType\":\"CreatingNewSubscription\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                          "headers": {
+                            "Log-Type": "HybridUserSync"
+                          },
+                          "path": "/api/logs"
+                        },
+                        "runAfter": {}
+                      },
+                      "Calculate_new_expiration": {
+                        "type": "Compose",
+                        "inputs": "@addDays(utcNow(), 3)",
+                        "runAfter": {
+                          "Log_creating_new_subscription": [
+                            "Succeeded"
+                          ]
+                        }
+                      },
+                      "Create_subscription": {
+                        "type": "Http",
+                        "inputs": {
+                          "method": "POST",
+                          "uri": "https://graph.microsoft.com/v1.0/subscriptions",
+                          "authentication": {
+                            "type": "ManagedServiceIdentity",
+                            "identity": "[parameters('managedIdentityId')]",
+                            "audience": "https://graph.microsoft.com"
+                          },
+                          "headers": {
+                            "Content-Type": "application/json"
+                          },
+                          "body": {
+                            "changeType": "updated",
+                            "notificationUrl": "@{parameters('webhookCallbackUrl')}",
+                            "resource": "users",
+                            "expirationDateTime": "@{outputs('Calculate_new_expiration')}",
+                            "clientState": "HybridUserSync"
+                          }
+                        },
+                        "runAfter": {
+                          "Calculate_new_expiration": [
+                            "Succeeded"
+                          ]
+                        }
+                      },
+                      "Parse_create_response": {
+                        "type": "ParseJson",
+                        "inputs": {
+                          "content": "@body('Create_subscription')",
+                          "schema": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "resource": {
+                                "type": "string"
+                              },
+                              "changeType": {
+                                "type": "string"
+                              },
+                              "expirationDateTime": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "runAfter": {
+                          "Create_subscription": [
+                            "Succeeded"
+                          ]
+                        }
+                      },
+                      "Store_subscription_id": {
+                        "type": "Http",
+                        "inputs": {
+                          "method": "PUT",
+                          "uri": "https://@{parameters('keyVaultName')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4",
+                          "authentication": {
+                            "type": "ManagedServiceIdentity",
+                            "identity": "[parameters('managedIdentityId')]",
+                            "audience": "https://vault.azure.net"
+                          },
+                          "headers": {
+                            "Content-Type": "application/json"
+                          },
+                          "body": {
+                            "value": "@{body('Parse_create_response')?['id']}"
+                          }
+                        },
+                        "runAfter": {
+                          "Parse_create_response": [
+                            "Succeeded"
+                          ]
+                        }
+                      },
+                      "Log_creation_success": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                          "host": {
+                            "connection": {
+                              "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                            }
+                          },
+                          "method": "post",
+                          "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalSuccess\",\"SubscriptionId\":\"',body('Parse_create_response')?['id'],'\",\"NewExpiration\":\"',outputs('Calculate_new_expiration'),'\",\"Action\":\"Created\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                          "headers": {
+                            "Log-Type": "HybridUserSync"
+                          },
+                          "path": "/api/logs"
+                        },
+                        "runAfter": {
+                          "Store_subscription_id": [
+                            "Succeeded"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Initialize_subscription_id": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Handle_renewal_error": {
+              "type": "Scope",
+              "actions": {
+                "Log_renewal_failure": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalFailure\",\"ErrorDetails\":\"',base64(string(result('Renewal_scope'))),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                    "headers": {
+                      "Log-Type": "HybridUserSync"
+                    },
+                    "path": "/api/logs"
+                  },
+                  "runAfter": {}
+                }
+              },
+              "runAfter": {
+                "Renewal_scope": [
+                  "Failed",
+                  "Skipped",
+                  "TimedOut"
+                ]
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "azureloganalyticsdatacollector": {
+                "connectionId": "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName')))]",
+                "connectionName": "[format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName'))]",
+                "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/connections",
+      "apiVersion": "2016-06-01",
+      "name": "[format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "displayName": "Azure Log Analytics Connection (Renewal)",
+        "api": {
+          "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+        },
+        "parameterValues": {
+          "username": "[parameters('logAnalyticsCustomerId')]",
+          "password": "[parameters('logAnalyticsPrimaryKey')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[format('Microsoft.Logic/workflows/{0}', parameters('renewalLogicAppName'))]",
+      "name": "diagnostics",
+      "properties": {
+        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+        "logs": [
+          {
+            "category": "WorkflowRuntime",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('renewalLogicAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "renewalLogicAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('renewalLogicAppName'))]"
+    },
+    "renewalLogicAppName": {
+      "type": "string",
+      "value": "[parameters('renewalLogicAppName')]"
+    }
+  }
+}

@@ -1,0 +1,1936 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.36.1.42791",
+      "templateHash": "17121632235199908652"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "dev",
+      "metadata": {
+        "description": "Environment name (e.g., dev, test, prod)"
+      }
+    },
+    "adminUnitId": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin Unit GUID to monitor"
+      }
+    },
+    "provisioningApiEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "API-driven provisioning endpoint URL"
+      }
+    },
+    "alertEmailAddresses": {
+      "type": "array",
+      "metadata": {
+        "description": "Email addresses for alerts (comma-separated)"
+      }
+    },
+    "deployMonitoring": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy monitoring alerts (set to false for initial deployment, enable after custom log table exists)"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "Environment": "[parameters('environmentName')]",
+        "Application": "HybridUserSync",
+        "ManagedBy": "Bicep"
+      },
+      "metadata": {
+        "description": "Tags to apply to all resources"
+      }
+    }
+  },
+  "variables": {
+    "resourcePrefix": "[format('hybriduser-{0}', parameters('environmentName'))]",
+    "keyVaultName": "[take(format('kv-{0}-{1}', variables('resourcePrefix'), uniqueString(resourceGroup().id)), 24)]",
+    "logicAppName": "[format('logic-{0}', variables('resourcePrefix'))]",
+    "managedIdentityName": "[format('id-{0}', variables('resourcePrefix'))]",
+    "logAnalyticsName": "[format('log-{0}', variables('resourcePrefix'))]",
+    "actionGroupName": "[format('ag-{0}', variables('resourcePrefix'))]",
+    "deadLetterStorageName": "[take(format('stdl{0}{1}', parameters('environmentName'), uniqueString(resourceGroup().id)), 24)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('managedIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": true,
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.KeyVault/vaults/{0}', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'Key Vault Secrets Officer')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('deadLetterStorageName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "accessTier": "Hot",
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": false
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}', variables('deadLetterStorageName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}/{2}', variables('deadLetterStorageName'), 'default', 'deadletter')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('deadLetterStorageName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', variables('deadLetterStorageName'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'Storage Blob Data Contributor')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('logAnalyticsName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 90
+      }
+    },
+    {
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('actionGroupName')]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "copy": [
+          {
+            "name": "emailReceivers",
+            "count": "[length(parameters('alertEmailAddresses'))]",
+            "input": {
+              "name": "[format('Email{0}', copyIndex('emailReceivers'))]",
+              "emailAddress": "[parameters('alertEmailAddresses')[copyIndex('emailReceivers')]]",
+              "useCommonAlertSchema": true
+            }
+          }
+        ],
+        "groupShortName": "[take('HybridUser', 12)]",
+        "enabled": true
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "logicapp-deployment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "logicAppName": {
+            "value": "[variables('logicAppName')]"
+          },
+          "managedIdentityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+          },
+          "managedIdentityPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]"
+          },
+          "keyVaultName": {
+            "value": "[variables('keyVaultName')]"
+          },
+          "adminUnitId": {
+            "value": "[parameters('adminUnitId')]"
+          },
+          "provisioningApiEndpoint": {
+            "value": "[parameters('provisioningApiEndpoint')]"
+          },
+          "deadLetterStorageAccountName": {
+            "value": "[variables('deadLetterStorageName')]"
+          },
+          "deadLetterContainerName": {
+            "value": "deadletter"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+          },
+          "logAnalyticsCustomerId": {
+            "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').customerId]"
+          },
+          "logAnalyticsPrimaryKey": {
+            "value": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').primarySharedKey]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.36.1.42791",
+              "templateHash": "15873631954225855887"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for the Logic App"
+              }
+            },
+            "logicAppName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Logic App"
+              }
+            },
+            "managedIdentityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Managed Identity Resource ID"
+              }
+            },
+            "managedIdentityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Managed Identity Principal ID"
+              }
+            },
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault name"
+              }
+            },
+            "adminUnitId": {
+              "type": "string",
+              "metadata": {
+                "description": "Admin Unit GUID"
+              }
+            },
+            "provisioningApiEndpoint": {
+              "type": "string",
+              "metadata": {
+                "description": "Provisioning API endpoint"
+              }
+            },
+            "deadLetterStorageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Dead Letter Storage Account name"
+              }
+            },
+            "deadLetterContainerName": {
+              "type": "string",
+              "metadata": {
+                "description": "Dead Letter Container name"
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics Workspace ID"
+              }
+            },
+            "logAnalyticsCustomerId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics Workspace Customer ID (GUID)"
+              }
+            },
+            "logAnalyticsPrimaryKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Log Analytics Workspace Primary Shared Key"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2019-05-01",
+              "name": "[parameters('logicAppName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('managedIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "$connections": {
+                      "defaultValue": {},
+                      "type": "Object"
+                    },
+                    "keyVaultName": {
+                      "defaultValue": "[parameters('keyVaultName')]",
+                      "type": "String"
+                    },
+                    "adminUnitId": {
+                      "defaultValue": "[parameters('adminUnitId')]",
+                      "type": "String"
+                    },
+                    "provisioningApiEndpoint": {
+                      "defaultValue": "[parameters('provisioningApiEndpoint')]",
+                      "type": "String"
+                    },
+                    "deadLetterStorageAccount": {
+                      "defaultValue": "[parameters('deadLetterStorageAccountName')]",
+                      "type": "String"
+                    },
+                    "deadLetterContainer": {
+                      "defaultValue": "[parameters('deadLetterContainerName')]",
+                      "type": "String"
+                    }
+                  },
+                  "triggers": {
+                    "manual": {
+                      "type": "Request",
+                      "kind": "Http",
+                      "inputs": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "subscriptionId": {
+                                    "type": "string"
+                                  },
+                                  "clientState": {
+                                    "type": "string"
+                                  },
+                                  "expirationDateTime": {
+                                    "type": "string"
+                                  },
+                                  "resource": {
+                                    "type": "string"
+                                  },
+                                  "tenantId": {
+                                    "type": "string"
+                                  },
+                                  "resourceData": {
+                                    "type": "object"
+                                  }
+                                }
+                              }
+                            },
+                            "validationToken": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "actions": {
+                    "Initialize_error_variable": {
+                      "type": "InitializeVariable",
+                      "inputs": {
+                        "variables": [
+                          {
+                            "name": "hasError",
+                            "type": "boolean",
+                            "value": false
+                          }
+                        ]
+                      },
+                      "runAfter": {}
+                    },
+                    "Initialize_error_message": {
+                      "type": "InitializeVariable",
+                      "inputs": {
+                        "variables": [
+                          {
+                            "name": "errorMessage",
+                            "type": "string",
+                            "value": ""
+                          }
+                        ]
+                      },
+                      "runAfter": {
+                        "Initialize_error_variable": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Initialize_user_id": {
+                      "type": "InitializeVariable",
+                      "inputs": {
+                        "variables": [
+                          {
+                            "name": "userId",
+                            "type": "string",
+                            "value": ""
+                          }
+                        ]
+                      },
+                      "runAfter": {
+                        "Initialize_error_message": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Check_if_validation_request": {
+                      "type": "If",
+                      "expression": {
+                        "and": [
+                          {
+                            "not": {
+                              "equals": [
+                                "@triggerBody()?['validationToken']",
+                                null
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "actions": {
+                        "Return_validation_token": {
+                          "type": "Response",
+                          "kind": "Http",
+                          "inputs": {
+                            "statusCode": 200,
+                            "headers": {
+                              "Content-Type": "text/plain"
+                            },
+                            "body": "@triggerBody()?['validationToken']"
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "For_each_notification": {
+                            "type": "Foreach",
+                            "foreach": "@triggerBody()?['value']",
+                            "actions": {
+                              "Set_user_id": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                  "name": "userId",
+                                  "value": "@{last(split(items('For_each_notification')?['resource'], '/'))}"
+                                },
+                                "runAfter": {}
+                              },
+                              "Process_user_scope": {
+                                "type": "Scope",
+                                "actions": {
+                                  "Get_user_details": {
+                                    "type": "Http",
+                                    "inputs": {
+                                      "method": "GET",
+                                      "uri": "https://graph.microsoft.com/v1.0/users/@{variables('userId')}?$select=id,userPrincipalName,onPremisesImmutableId,displayName",
+                                      "authentication": {
+                                        "type": "ManagedServiceIdentity",
+                                        "identity": "[parameters('managedIdentityId')]",
+                                        "audience": "https://graph.microsoft.com"
+                                      }
+                                    },
+                                    "runAfter": {}
+                                  },
+                                  "Parse_user_details": {
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                      "content": "@body('Get_user_details')",
+                                      "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "userPrincipalName": {
+                                            "type": "string"
+                                          },
+                                          "displayName": {
+                                            "type": "string"
+                                          },
+                                          "onPremisesImmutableId": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "runAfter": {
+                                      "Get_user_details": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  },
+                                  "Check_admin_unit_membership": {
+                                    "type": "Http",
+                                    "inputs": {
+                                      "method": "GET",
+                                      "uri": "https://graph.microsoft.com/v1.0/directory/administrativeUnits/@{parameters('adminUnitId')}/members?$filter=id eq '@{variables('userId')}'",
+                                      "authentication": {
+                                        "type": "ManagedServiceIdentity",
+                                        "identity": "[parameters('managedIdentityId')]",
+                                        "audience": "https://graph.microsoft.com"
+                                      }
+                                    },
+                                    "runAfter": {
+                                      "Parse_user_details": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  },
+                                  "Parse_admin_unit_response": {
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                      "content": "@body('Check_admin_unit_membership')",
+                                      "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                          "value": {
+                                            "type": "array"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "runAfter": {
+                                      "Check_admin_unit_membership": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  },
+                                  "Check_if_in_admin_unit": {
+                                    "type": "If",
+                                    "expression": {
+                                      "and": [
+                                        {
+                                          "greater": [
+                                            "@length(body('Parse_admin_unit_response')?['value'])",
+                                            0
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    "actions": {
+                                      "Log_user_in_admin_unit": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                          "host": {
+                                            "connection": {
+                                              "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                            }
+                                          },
+                                          "method": "post",
+                                          "body": "@{json(concat('[{\"EventType\":\"UserInAdminUnit\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"AdminUnitId\":\"',parameters('adminUnitId'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                          "headers": {
+                                            "Log-Type": "HybridUserSync"
+                                          },
+                                          "path": "/api/logs"
+                                        },
+                                        "runAfter": {}
+                                      },
+                                      "Check_if_hybrid": {
+                                        "type": "If",
+                                        "expression": {
+                                          "and": [
+                                            {
+                                              "equals": [
+                                                "@body('Parse_user_details')?['onPremisesImmutableId']",
+                                                null
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        "actions": {
+                                          "Log_provisioning_start": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                              "host": {
+                                                "connection": {
+                                                  "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                                }
+                                              },
+                                              "method": "post",
+                                              "body": "@{json(concat('[{\"EventType\":\"ProvisioningStarted\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                              "headers": {
+                                                "Log-Type": "HybridUserSync"
+                                              },
+                                              "path": "/api/logs"
+                                            },
+                                            "runAfter": {}
+                                          },
+                                          "Provision_user_to_ADDS": {
+                                            "type": "Http",
+                                            "inputs": {
+                                              "method": "POST",
+                                              "uri": "@{parameters('provisioningApiEndpoint')}",
+                                              "authentication": {
+                                                "type": "ManagedServiceIdentity",
+                                                "identity": "[parameters('managedIdentityId')]",
+                                                "audience": "https://graph.microsoft.com"
+                                              },
+                                              "headers": {
+                                                "Content-Type": "application/json"
+                                              },
+                                              "body": {
+                                                "id": "@{variables('userId')}",
+                                                "userPrincipalName": "@{body('Parse_user_details')?['userPrincipalName']}",
+                                                "displayName": "@{body('Parse_user_details')?['displayName']}"
+                                              }
+                                            },
+                                            "runAfter": {
+                                              "Log_provisioning_start": [
+                                                "Succeeded"
+                                              ]
+                                            }
+                                          },
+                                          "Log_provisioning_success": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                              "host": {
+                                                "connection": {
+                                                  "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                                }
+                                              },
+                                              "method": "post",
+                                              "body": "@{json(concat('[{\"EventType\":\"ProvisioningSuccess\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                              "headers": {
+                                                "Log-Type": "HybridUserSync"
+                                              },
+                                              "path": "/api/logs"
+                                            },
+                                            "runAfter": {
+                                              "Provision_user_to_ADDS": [
+                                                "Succeeded"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "else": {
+                                          "actions": {
+                                            "Log_setting_source_of_authority": {
+                                              "type": "ApiConnection",
+                                              "inputs": {
+                                                "host": {
+                                                  "connection": {
+                                                    "name": "@parameters('$connections')['azureloganalyticsdatacollector')['connectionId']"
+                                                  }
+                                                },
+                                                "method": "post",
+                                                "body": "@{json(concat('[{\"EventType\":\"SettingSourceOfAuthority\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"ImmutableId\":\"',body('Parse_user_details')?['onPremisesImmutableId'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                                "headers": {
+                                                  "Log-Type": "HybridUserSync"
+                                                },
+                                                "path": "/api/logs"
+                                              },
+                                              "runAfter": {}
+                                            },
+                                            "Set_source_of_authority": {
+                                              "type": "Http",
+                                              "inputs": {
+                                                "method": "PUT",
+                                                "uri": "https://graph.microsoft.com/beta/users/@{variables('userId')}/onPremisesSyncBehavior",
+                                                "authentication": {
+                                                  "type": "ManagedServiceIdentity",
+                                                  "identity": "[parameters('managedIdentityId')]",
+                                                  "audience": "https://graph.microsoft.com"
+                                                },
+                                                "headers": {
+                                                  "Content-Type": "application/json"
+                                                },
+                                                "body": {
+                                                  "@@odata.type": "microsoft.graph.onPremisesDirectorySynchronization",
+                                                  "synchronizationBehavior": "cloudMastered"
+                                                }
+                                              },
+                                              "runAfter": {
+                                                "Log_setting_source_of_authority": [
+                                                  "Succeeded"
+                                                ]
+                                              }
+                                            },
+                                            "Log_source_of_authority_success": {
+                                              "type": "ApiConnection",
+                                              "inputs": {
+                                                "host": {
+                                                  "connection": {
+                                                    "name": "@parameters('$connections')['azureloganalyticsdatacollector')['connectionId']"
+                                                  }
+                                                },
+                                                "method": "post",
+                                                "body": "@{json(concat('[{\"EventType\":\"SourceOfAuthoritySuccess\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                                "headers": {
+                                                  "Log-Type": "HybridUserSync"
+                                                },
+                                                "path": "/api/logs"
+                                              },
+                                              "runAfter": {
+                                                "Set_source_of_authority": [
+                                                  "Succeeded"
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        },
+                                        "runAfter": {
+                                          "Log_user_in_admin_unit": [
+                                            "Succeeded"
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "else": {
+                                      "actions": {
+                                        "Log_user_not_in_admin_unit": {
+                                          "type": "ApiConnection",
+                                          "inputs": {
+                                            "host": {
+                                              "connection": {
+                                                "name": "@parameters('$connections')['azureloganalyticsdatacollector')['connectionId']"
+                                              }
+                                            },
+                                            "method": "post",
+                                            "body": "@{json(concat('[{\"EventType\":\"UserNotInAdminUnit\",\"UserId\":\"',variables('userId'),'\",\"UserPrincipalName\":\"',body('Parse_user_details')?['userPrincipalName'],'\",\"AdminUnitId\":\"',parameters('adminUnitId'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                            "headers": {
+                                              "Log-Type": "HybridUserSync"
+                                            },
+                                            "path": "/api/logs"
+                                          },
+                                          "runAfter": {}
+                                        }
+                                      }
+                                    },
+                                    "runAfter": {
+                                      "Parse_admin_unit_response": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "runAfter": {
+                                  "Set_user_id": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              },
+                              "Process_user_error_handler": {
+                                "type": "Scope",
+                                "actions": {
+                                  "Set_error_flag": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                      "name": "hasError",
+                                      "value": true
+                                    },
+                                    "runAfter": {}
+                                  },
+                                  "Compose_error_details": {
+                                    "type": "Compose",
+                                    "inputs": {
+                                      "userId": "@{variables('userId')}",
+                                      "error": "@{result('Process_user_scope')}",
+                                      "notification": "@{items('For_each_notification')}",
+                                      "timestamp": "@{utcNow()}"
+                                    },
+                                    "runAfter": {
+                                      "Set_error_flag": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  },
+                                  "Write_to_dead_letter": {
+                                    "type": "Http",
+                                    "inputs": {
+                                      "method": "PUT",
+                                      "uri": "https://@{parameters('deadLetterStorageAccount')}.blob.core.windows.net/@{parameters('deadLetterContainer')}/@{utcNow('yyyy-MM-dd_HHmmss')}_@{variables('userId')}.json",
+                                      "authentication": {
+                                        "type": "ManagedServiceIdentity",
+                                        "identity": "[parameters('managedIdentityId')]",
+                                        "audience": "https://storage.azure.com/"
+                                      },
+                                      "headers": {
+                                        "x-ms-blob-type": "BlockBlob",
+                                        "Content-Type": "application/json"
+                                      },
+                                      "body": "@outputs('Compose_error_details')"
+                                    },
+                                    "runAfter": {
+                                      "Compose_error_details": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  },
+                                  "Log_error": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                      "host": {
+                                        "connection": {
+                                          "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                        }
+                                      },
+                                      "method": "post",
+                                      "body": "@{json(concat('[{\"EventType\":\"ProcessingError\",\"UserId\":\"',variables('userId'),'\",\"ErrorDetails\":\"',base64(string(result('Process_user_scope'))),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                      "headers": {
+                                        "Log-Type": "HybridUserSync"
+                                      },
+                                      "path": "/api/logs"
+                                    },
+                                    "runAfter": {
+                                      "Write_to_dead_letter": [
+                                        "Succeeded"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "runAfter": {
+                                  "Process_user_scope": [
+                                    "Failed",
+                                    "Skipped",
+                                    "TimedOut"
+                                  ]
+                                }
+                              }
+                            },
+                            "runAfter": {}
+                          },
+                          "Return_success_response": {
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                              "statusCode": 202,
+                              "headers": {
+                                "Content-Type": "application/json"
+                              },
+                              "body": {
+                                "status": "accepted",
+                                "processedCount": "@length(triggerBody()?['value'])",
+                                "hasErrors": "@variables('hasError')"
+                              }
+                            },
+                            "runAfter": {
+                              "For_each_notification": [
+                                "Succeeded",
+                                "Failed"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Initialize_user_id": [
+                          "Succeeded"
+                        ]
+                      }
+                    }
+                  },
+                  "outputs": {}
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "azureloganalyticsdatacollector": {
+                        "connectionId": "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('logicAppName')))]",
+                        "connectionName": "[format('azureloganalyticsdatacollector-{0}', parameters('logicAppName'))]",
+                        "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+                      }
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('logicAppName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[format('azureloganalyticsdatacollector-{0}', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Azure Log Analytics Connection",
+                "api": {
+                  "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+                },
+                "parameterValues": {
+                  "username": "[parameters('logAnalyticsCustomerId')]",
+                  "password": "[parameters('logAnalyticsPrimaryKey')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[format('Microsoft.Logic/workflows/{0}', parameters('logicAppName'))]",
+              "name": "diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "category": "WorkflowRuntime",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "logicAppId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+            },
+            "managedIdentityPrincipalId": {
+              "type": "string",
+              "value": "[parameters('managedIdentityPrincipalId')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('deadLetterStorageName'), 'default', 'deadletter')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'Key Vault Secrets Officer'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('deadLetterStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'Storage Blob Data Contributor'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "subscription-renewal-deployment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "renewalLogicAppName": {
+            "value": "[format('logic-{0}-renewal', variables('resourcePrefix'))]"
+          },
+          "managedIdentityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+          },
+          "keyVaultName": {
+            "value": "[variables('keyVaultName')]"
+          },
+          "webhookCallbackUrl": {
+            "value": "https://placeholder.com"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+          },
+          "logAnalyticsCustomerId": {
+            "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').customerId]"
+          },
+          "logAnalyticsPrimaryKey": {
+            "value": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').primarySharedKey]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.36.1.42791",
+              "templateHash": "3762970137952715853"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for the Logic App"
+              }
+            },
+            "renewalLogicAppName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the subscription renewal Logic App"
+              }
+            },
+            "managedIdentityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Managed Identity Resource ID"
+              }
+            },
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault name"
+              }
+            },
+            "webhookCallbackUrl": {
+              "type": "string",
+              "metadata": {
+                "description": "Main Logic App callback URL"
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics Workspace ID"
+              }
+            },
+            "logAnalyticsCustomerId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics Workspace Customer ID (GUID)"
+              }
+            },
+            "logAnalyticsPrimaryKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Log Analytics Workspace Primary Shared Key"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2019-05-01",
+              "name": "[parameters('renewalLogicAppName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('managedIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "$connections": {
+                      "defaultValue": {},
+                      "type": "Object"
+                    },
+                    "keyVaultName": {
+                      "defaultValue": "[parameters('keyVaultName')]",
+                      "type": "String"
+                    },
+                    "webhookCallbackUrl": {
+                      "defaultValue": "[parameters('webhookCallbackUrl')]",
+                      "type": "String"
+                    }
+                  },
+                  "triggers": {
+                    "Recurrence": {
+                      "type": "Recurrence",
+                      "recurrence": {
+                        "frequency": "Hour",
+                        "interval": 36
+                      }
+                    }
+                  },
+                  "actions": {
+                    "Initialize_subscription_id": {
+                      "type": "InitializeVariable",
+                      "inputs": {
+                        "variables": [
+                          {
+                            "name": "subscriptionId",
+                            "type": "string",
+                            "value": ""
+                          }
+                        ]
+                      },
+                      "runAfter": {}
+                    },
+                    "Renewal_scope": {
+                      "type": "Scope",
+                      "actions": {
+                        "Get_subscription_id_from_keyvault": {
+                          "type": "Http",
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "https://@{parameters('keyVaultName')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "identity": "[parameters('managedIdentityId')]",
+                              "audience": "https://vault.azure.net"
+                            }
+                          },
+                          "runAfter": {}
+                        },
+                        "Parse_keyvault_response": {
+                          "type": "ParseJson",
+                          "inputs": {
+                            "content": "@body('Get_subscription_id_from_keyvault')",
+                            "schema": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "runAfter": {
+                            "Get_subscription_id_from_keyvault": [
+                              "Succeeded"
+                            ]
+                          }
+                        },
+                        "Check_if_subscription_exists": {
+                          "type": "If",
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@actions('Get_subscription_id_from_keyvault').status",
+                                  "Succeeded"
+                                ]
+                              }
+                            ]
+                          },
+                          "runAfter": {
+                            "Parse_keyvault_response": [
+                              "Succeeded",
+                              "Skipped"
+                            ]
+                          },
+                          "actions": {
+                            "Set_subscription_id": {
+                              "type": "SetVariable",
+                              "inputs": {
+                                "name": "subscriptionId",
+                                "value": "@body('Parse_keyvault_response')?['value']"
+                              },
+                              "runAfter": {}
+                            },
+                            "Calculate_expiration": {
+                              "type": "Compose",
+                              "inputs": "@addDays(utcNow(), 3)",
+                              "runAfter": {
+                                "Set_subscription_id": [
+                                  "Succeeded"
+                                ]
+                              }
+                            },
+                            "Renew_subscription": {
+                              "type": "Http",
+                              "inputs": {
+                                "method": "PATCH",
+                                "uri": "https://graph.microsoft.com/v1.0/subscriptions/@{variables('subscriptionId')}",
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "identity": "[parameters('managedIdentityId')]",
+                                  "audience": "https://graph.microsoft.com"
+                                },
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "body": {
+                                  "expirationDateTime": "@{outputs('Calculate_expiration')}"
+                                }
+                              },
+                              "runAfter": {
+                                "Calculate_expiration": [
+                                  "Succeeded"
+                                ]
+                              }
+                            },
+                            "Log_renewal_success": {
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalSuccess\",\"SubscriptionId\":\"',variables('subscriptionId'),'\",\"NewExpiration\":\"',outputs('Calculate_expiration'),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                "headers": {
+                                  "Log-Type": "HybridUserSync"
+                                },
+                                "path": "/api/logs"
+                              },
+                              "runAfter": {
+                                "Renew_subscription": [
+                                  "Succeeded"
+                                ]
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Log_creating_new_subscription": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                  "host": {
+                                    "connection": {
+                                      "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                    }
+                                  },
+                                  "method": "post",
+                                  "body": "@{json(concat('[{\"EventType\":\"CreatingNewSubscription\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                  "headers": {
+                                    "Log-Type": "HybridUserSync"
+                                  },
+                                  "path": "/api/logs"
+                                },
+                                "runAfter": {}
+                              },
+                              "Calculate_new_expiration": {
+                                "type": "Compose",
+                                "inputs": "@addDays(utcNow(), 3)",
+                                "runAfter": {
+                                  "Log_creating_new_subscription": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              },
+                              "Create_subscription": {
+                                "type": "Http",
+                                "inputs": {
+                                  "method": "POST",
+                                  "uri": "https://graph.microsoft.com/v1.0/subscriptions",
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "identity": "[parameters('managedIdentityId')]",
+                                    "audience": "https://graph.microsoft.com"
+                                  },
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "body": {
+                                    "changeType": "updated",
+                                    "notificationUrl": "@{parameters('webhookCallbackUrl')}",
+                                    "resource": "users",
+                                    "expirationDateTime": "@{outputs('Calculate_new_expiration')}",
+                                    "clientState": "HybridUserSync"
+                                  }
+                                },
+                                "runAfter": {
+                                  "Calculate_new_expiration": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              },
+                              "Parse_create_response": {
+                                "type": "ParseJson",
+                                "inputs": {
+                                  "content": "@body('Create_subscription')",
+                                  "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "resource": {
+                                        "type": "string"
+                                      },
+                                      "changeType": {
+                                        "type": "string"
+                                      },
+                                      "expirationDateTime": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                },
+                                "runAfter": {
+                                  "Create_subscription": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              },
+                              "Store_subscription_id": {
+                                "type": "Http",
+                                "inputs": {
+                                  "method": "PUT",
+                                  "uri": "https://@{parameters('keyVaultName')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4",
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "identity": "[parameters('managedIdentityId')]",
+                                    "audience": "https://vault.azure.net"
+                                  },
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "body": {
+                                    "value": "@{body('Parse_create_response')?['id']}"
+                                  }
+                                },
+                                "runAfter": {
+                                  "Parse_create_response": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              },
+                              "Log_creation_success": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                  "host": {
+                                    "connection": {
+                                      "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                                    }
+                                  },
+                                  "method": "post",
+                                  "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalSuccess\",\"SubscriptionId\":\"',body('Parse_create_response')?['id'],'\",\"NewExpiration\":\"',outputs('Calculate_new_expiration'),'\",\"Action\":\"Created\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                                  "headers": {
+                                    "Log-Type": "HybridUserSync"
+                                  },
+                                  "path": "/api/logs"
+                                },
+                                "runAfter": {
+                                  "Store_subscription_id": [
+                                    "Succeeded"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Initialize_subscription_id": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Handle_renewal_error": {
+                      "type": "Scope",
+                      "actions": {
+                        "Log_renewal_failure": {
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "body": "@{json(concat('[{\"EventType\":\"SubscriptionRenewalFailure\",\"ErrorDetails\":\"',base64(string(result('Renewal_scope'))),'\",\"Timestamp\":\"',utcNow(),'\"}]'))}",
+                            "headers": {
+                              "Log-Type": "HybridUserSync"
+                            },
+                            "path": "/api/logs"
+                          },
+                          "runAfter": {}
+                        }
+                      },
+                      "runAfter": {
+                        "Renewal_scope": [
+                          "Failed",
+                          "Skipped",
+                          "TimedOut"
+                        ]
+                      }
+                    }
+                  },
+                  "outputs": {}
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "azureloganalyticsdatacollector": {
+                        "connectionId": "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName')))]",
+                        "connectionName": "[format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName'))]",
+                        "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+                      }
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[format('azureloganalyticsdatacollector-{0}', parameters('renewalLogicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Azure Log Analytics Connection (Renewal)",
+                "api": {
+                  "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'azureloganalyticsdatacollector')]"
+                },
+                "parameterValues": {
+                  "username": "[parameters('logAnalyticsCustomerId')]",
+                  "password": "[parameters('logAnalyticsPrimaryKey')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[format('Microsoft.Logic/workflows/{0}', parameters('renewalLogicAppName'))]",
+              "name": "diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "category": "WorkflowRuntime",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Logic/workflows', parameters('renewalLogicAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "renewalLogicAppId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Logic/workflows', parameters('renewalLogicAppName'))]"
+            },
+            "renewalLogicAppName": {
+              "type": "string",
+              "value": "[parameters('renewalLogicAppName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'Key Vault Secrets Officer'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployMonitoring')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "monitoring-deployment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "logicAppName": {
+            "value": "[variables('logicAppName')]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+          },
+          "actionGroupId": {
+            "value": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.36.1.42791",
+              "templateHash": "4139538998132897880"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for monitoring resources"
+              }
+            },
+            "logicAppName": {
+              "type": "string",
+              "metadata": {
+                "description": "Logic App name to monitor"
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics Workspace ID"
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Action Group ID for alerts"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-failures', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Logic App Run Failures",
+                "description": "Alert when Logic App runs fail",
+                "severity": 2,
+                "enabled": true,
+                "evaluationFrequency": "PT5M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT5M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "[format('AzureDiagnostics\n| where ResourceProvider == \"MICROSOFT.LOGIC\"\n| where resource_workflowName_s == \"{0}\"\n| where status_s == \"Failed\"\n| summarize Count = count() by bin(TimeGenerated, 5m)', parameters('logicAppName'))]",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-processing-errors', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "User Processing Errors",
+                "description": "Alert when user processing encounters errors",
+                "severity": 2,
+                "enabled": false,
+                "evaluationFrequency": "PT5M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT5M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"ProcessingError\"\n| summarize Count = count() by bin(TimeGenerated, 5m)",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-provisioning-success', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Successful User Provisioning",
+                "description": "Notification when users are successfully provisioned to AD DS",
+                "severity": 3,
+                "enabled": false,
+                "evaluationFrequency": "PT15M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT15M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"ProvisioningSuccess\"\n| summarize Count = count() by bin(TimeGenerated, 15m)",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-renewal-success', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Subscription Renewal Success",
+                "description": "Heartbeat: Subscription successfully renewed",
+                "severity": 3,
+                "enabled": false,
+                "evaluationFrequency": "PT15M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT15M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"SubscriptionRenewalSuccess\"\n| summarize Count = count() by bin(TimeGenerated, 15m)",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-renewal-failure', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Subscription Renewal Failure",
+                "description": "Alert when subscription renewal fails",
+                "severity": 1,
+                "enabled": false,
+                "evaluationFrequency": "PT5M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT5M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"SubscriptionRenewalFailure\"\n| summarize Count = count() by bin(TimeGenerated, 5m)",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-no-renewal-heartbeat', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "No Subscription Renewal (Heartbeat)",
+                "description": "Alert when no subscription renewal has occurred in the last 48 hours",
+                "severity": 1,
+                "enabled": false,
+                "evaluationFrequency": "PT1H",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT48H",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"SubscriptionRenewalSuccess\"\n| summarize Count = count()",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "LessThanOrEqual",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-03-15-preview",
+              "name": "[format('alert-{0}-soa-success', parameters('logicAppName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "Source of Authority Change Success",
+                "description": "Notification when source of authority is successfully changed to Entra",
+                "severity": 3,
+                "enabled": false,
+                "evaluationFrequency": "PT15M",
+                "scopes": [
+                  "[parameters('logAnalyticsWorkspaceId')]"
+                ],
+                "windowSize": "PT15M",
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "HybridUserSync_CL\n| where EventType_s == \"SourceOfAuthoritySuccess\"\n| summarize Count = count() by bin(TimeGenerated, 15m)",
+                      "timeAggregation": "Total",
+                      "metricMeasureColumn": "Count",
+                      "dimensions": [],
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      }
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupId')]"
+                  ]
+                },
+                "autoMitigate": true
+              }
+            }
+          ],
+          "outputs": {
+            "alertIds": {
+              "type": "array",
+              "value": [
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-failures', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-processing-errors', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-provisioning-success', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-renewal-success', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-renewal-failure', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-no-renewal-heartbeat', parameters('logicAppName')))]",
+                "[resourceId('Microsoft.Insights/scheduledQueryRules', format('alert-{0}-soa-success', parameters('logicAppName')))]"
+              ]
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'logicapp-deployment')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "logicAppName": {
+      "type": "string",
+      "value": "[variables('logicAppName')]"
+    },
+    "renewalLogicAppName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'subscription-renewal-deployment'), '2022-09-01').outputs.renewalLogicAppName.value]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]"
+    },
+    "managedIdentityClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId]"
+    },
+    "deadLetterStorageAccountName": {
+      "type": "string",
+      "value": "[variables('deadLetterStorageName')]"
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+    },
+    "actionGroupName": {
+      "type": "string",
+      "value": "[variables('actionGroupName')]"
+    }
+  }
+}
