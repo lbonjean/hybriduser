@@ -56,6 +56,11 @@ $permissions = @(
         Name = "SynchronizationData-User.Upload"
         Id = "db31e92a-b9ea-4d87-bf6a-75a37a9ca35a"
         Description = "Upload bulk user data to identity synchronization service"
+    },
+    @{
+        Name = "User-OnPremisesSyncBehavior.ReadWrite.All"
+        Id = "a94a502d-0281-4d15-8cd2-682ac9362c4c"
+        Description = "Read and write user source of authority (SOA) settings"
     }
 )
 

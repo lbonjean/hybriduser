@@ -333,11 +333,11 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 }
                                 runAfter: {}
                               }
-                              // Set source of authority to Entra via beta API
+                              // Set source of authority to cloud (isCloudManaged=true)
                               Set_source_of_authority: {
                                 type: 'Http'
                                 inputs: {
-                                  method: 'PUT'
+                                  method: 'PATCH'
                                   uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
                                   authentication: {
                                     type: 'ManagedServiceIdentity'
@@ -347,8 +347,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                     'Content-Type': 'application/json'
                                   }
                                   body: {
-                                    '@@odata.type': 'microsoft.graph.onPremisesDirectorySynchronization'
-                                    synchronizationBehavior: 'cloudMastered'
+                                    isCloudManaged: true
                                   }
                                 }
                                 runAfter: {
