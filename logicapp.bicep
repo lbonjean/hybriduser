@@ -307,34 +307,16 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           Check_if_hybrid: {
                             type: 'If'
                             expression: {
-                              and: [
-                                {
-                                  equals: [
-                                    '@body(\'Parse_user_details\')?[\'onPremisesImmutableId\']'
-                                    null
-                                  ]
-                                }
-                                {
-                                  or: [
-                                    {
-                                      equals: [
-                                        '@body(\'Parse_user_details\')?[\'onPremisesSyncEnabled\']'
-                                        false
-                                      ]
-                                    }
-                                    {
-                                      equals: [
-                                        '@body(\'Parse_user_details\')?[\'onPremisesSyncEnabled\']'
-                                        null
-                                      ]
-                                    }
-                                  ]
-                                }
-                              ]
+                              not: {
+                                equals: [
+                                  '@body(\'Parse_user_details\')?[\'onPremisesImmutableId\']'
+                                  null
+                                ]
+                              }
                             }
                             actions: {
-                              // User is NOT hybrid - provision to AD DS
-                              Log_provisioning_start: {
+                              // User IS hybrid - set source of authority to Entra
+                              Log_setting_source_of_authority: {
                                 type: 'ApiConnection'
                                 inputs: {
                                   host: {
@@ -343,7 +325,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                     }
                                   }
                                   method: 'post'
-                                  body: '@{json(concat(\'[{"EventType":"ProvisioningStarted","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                  body: '@{json(concat(\'[{"EventType":"SettingSourceOfAuthority","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                   headers: {
                                     'Log-Type': 'HybridUserSync'
                                   }
@@ -351,66 +333,30 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 }
                                 runAfter: {}
                               }
-                              // Call provisioning API
-                              Provision_user_to_ADDS: {
+                              // Set source of authority to Entra via beta API
+                              Set_source_of_authority: {
                                 type: 'Http'
                                 inputs: {
-                                  method: 'POST'
-                                  uri: '@{parameters(\'provisioningApiEndpoint\')}'
+                                  method: 'PUT'
+                                  uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
                                   authentication: {
                                     type: 'ManagedServiceIdentity'
                                     audience: 'https://graph.microsoft.com'
                                   }
                                   headers: {
-                                    'Content-Type': 'application/scim+json'
+                                    'Content-Type': 'application/json'
                                   }
                                   body: {
-                                    schemas: [
-                                      'urn:ietf:params:scim:api:messages:2.0:BulkRequest'
-                                    ]
-                                    Operations: [
-                                      {
-                                        method: 'POST'
-                                        bulkId: '@{guid()}'
-                                        path: '/Users'
-                                        data: {
-                                          schemas: [
-                                            'urn:ietf:params:scim:schemas:core:2.0:User'
-                                            'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User'
-                                          ]
-                                          externalId: '@{if(empty(body(\'Parse_user_details\')?[\'employeeId\']), utcNow(\'yyyyMMddHHmmss\'), body(\'Parse_user_details\')?[\'employeeId\'])}'
-                                          userName: '@{body(\'Parse_user_details\')?[\'userPrincipalName\']}'
-                                          name: {
-                                            givenName: '@{body(\'Parse_user_details\')?[\'givenName\']}'
-                                            familyName: '@{body(\'Parse_user_details\')?[\'surname\']}'
-                                          }
-                                          displayName: '@{body(\'Parse_user_details\')?[\'displayName\']}'
-                                          emails: [
-                                            {
-                                              value: '@{coalesce(body(\'Parse_user_details\')?[\'mail\'], body(\'Parse_user_details\')?[\'userPrincipalName\'])}'
-                                              type: 'work'
-                                              primary: true
-                                            }
-                                          ]
-                                          active: true
-                                          'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User': {
-                                            employeeNumber: '@{body(\'Parse_user_details\')?[\'employeeId\']}'
-                                            department: '@{body(\'Parse_user_details\')?[\'department\']}'
-                                            organization: '@{body(\'Parse_user_details\')?[\'companyName\']}'
-                                          }
-                                        }
-                                      }
-                                    ]
-                                    failOnErrors: null
+                                    '@@odata.type': 'microsoft.graph.onPremisesDirectorySynchronization'
+                                    synchronizationBehavior: 'cloudMastered'
                                   }
                                 }
-                                operationOptions: 'DisableAsyncPattern'
                                 runAfter: {
-                                  Log_provisioning_start: ['Succeeded']
+                                  Log_setting_source_of_authority: ['Succeeded']
                                 }
                               }
-                              // Log successful provisioning
-                              Log_provisioning_success: {
+                              // Log successful source of authority change
+                              Log_source_of_authority_success: {
                                 type: 'ApiConnection'
                                 inputs: {
                                   host: {
@@ -419,30 +365,30 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                     }
                                   }
                                   method: 'post'
-                                  body: '@{json(concat(\'[{"EventType":"ProvisioningSuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                  body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                   headers: {
                                     'Log-Type': 'HybridUserSync'
                                   }
                                   path: '/api/logs'
                                 }
                                 runAfter: {
-                                  Provision_user_to_ADDS: ['Succeeded']
+                                  Set_source_of_authority: ['Succeeded']
                                 }
                               }
                             }
                             else: {
                               actions: {
-                                // User IS hybrid - set source of authority to Entra
-                                Log_setting_source_of_authority: {
+                                // User is NOT hybrid - provision to AD DS
+                                Log_provisioning_start: {
                                   type: 'ApiConnection'
                                   inputs: {
                                     host: {
                                       connection: {
-                                        name: '@parameters(\'$$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                        name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
                                       }
                                     }
                                     method: 'post'
-                                    body: '@{json(concat(\'[{"EventType":"SettingSourceOfAuthority","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                    body: '@{json(concat(\'[{"EventType":"ProvisioningStarted","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                     headers: {
                                       'Log-Type': 'HybridUserSync'
                                     }
@@ -450,46 +396,82 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                   }
                                   runAfter: {}
                                 }
-                                // Set source of authority to Entra via beta API
-                                Set_source_of_authority: {
+                                // Call provisioning API
+                                Provision_user_to_ADDS: {
                                   type: 'Http'
                                   inputs: {
-                                    method: 'PUT'
-                                    uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
+                                    method: 'POST'
+                                    uri: '@{parameters(\'provisioningApiEndpoint\')}'
                                     authentication: {
                                       type: 'ManagedServiceIdentity'
                                       audience: 'https://graph.microsoft.com'
                                     }
                                     headers: {
-                                      'Content-Type': 'application/json'
+                                      'Content-Type': 'application/scim+json'
                                     }
                                     body: {
-                                      '@@odata.type': 'microsoft.graph.onPremisesDirectorySynchronization'
-                                      synchronizationBehavior: 'cloudMastered'
+                                      schemas: [
+                                        'urn:ietf:params:scim:api:messages:2.0:BulkRequest'
+                                      ]
+                                      Operations: [
+                                        {
+                                          method: 'POST'
+                                          bulkId: '@{guid()}'
+                                          path: '/Users'
+                                          data: {
+                                            schemas: [
+                                              'urn:ietf:params:scim:schemas:core:2.0:User'
+                                              'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User'
+                                            ]
+                                            externalId: '@{if(empty(body(\'Parse_user_details\')?[\'employeeId\']), utcNow(\'yyyyMMddHHmmss\'), body(\'Parse_user_details\')?[\'employeeId\'])}'
+                                            userName: '@{body(\'Parse_user_details\')?[\'userPrincipalName\']}'
+                                            name: {
+                                              givenName: '@{body(\'Parse_user_details\')?[\'givenName\']}'
+                                              familyName: '@{body(\'Parse_user_details\')?[\'surname\']}'
+                                            }
+                                            displayName: '@{body(\'Parse_user_details\')?[\'displayName\']}'
+                                            emails: [
+                                              {
+                                                value: '@{coalesce(body(\'Parse_user_details\')?[\'mail\'], body(\'Parse_user_details\')?[\'userPrincipalName\'])}'
+                                                type: 'work'
+                                                primary: true
+                                              }
+                                            ]
+                                            active: true
+                                            'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User': {
+                                              employeeNumber: '@{body(\'Parse_user_details\')?[\'employeeId\']}'
+                                              department: '@{body(\'Parse_user_details\')?[\'department\']}'
+                                              organization: '@{body(\'Parse_user_details\')?[\'companyName\']}'
+                                            }
+                                          }
+                                        }
+                                      ]
+                                      failOnErrors: null
                                     }
                                   }
+                                  operationOptions: 'DisableAsyncPattern'
                                   runAfter: {
-                                    Log_setting_source_of_authority: ['Succeeded']
+                                    Log_provisioning_start: ['Succeeded']
                                   }
                                 }
-                                // Log successful source of authority change
-                                Log_source_of_authority_success: {
+                                // Log successful provisioning
+                                Log_provisioning_success: {
                                   type: 'ApiConnection'
                                   inputs: {
                                     host: {
                                       connection: {
-                                        name: '@parameters(\'$$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                        name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
                                       }
                                     }
                                     method: 'post'
-                                    body: '@{json(concat(\'[{"EventType":"SourceOfAuthoritySuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                    body: '@{json(concat(\'[{"EventType":"ProvisioningSuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                                     headers: {
                                       'Log-Type': 'HybridUserSync'
                                     }
                                     path: '/api/logs'
                                   }
                                   runAfter: {
-                                    Set_source_of_authority: ['Succeeded']
+                                    Provision_user_to_ADDS: ['Succeeded']
                                   }
                                 }
                               }
