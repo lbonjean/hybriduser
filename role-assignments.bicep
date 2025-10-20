@@ -1,6 +1,10 @@
 @description('Logic App Principal ID (System-Assigned Identity)')
 param logicAppPrincipalId string
 
+@description('Renewal Logic App Principal ID (System-Assigned Identity)')
+param renewallogicAppPrincipalId string
+
+
 @description('Key Vault Resource ID')
 param keyVaultId string
 
@@ -8,7 +12,7 @@ param keyVaultId string
 param deadLetterStorageId string
 
 // Grant Key Vault Secrets Officer role to Logic App System-Assigned Identity
-resource keyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource keyVaultRoleAssignmentApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(keyVaultId, logicAppPrincipalId, 'Key Vault Secrets Officer')
   scope: resourceGroup()
   properties: {
@@ -17,6 +21,19 @@ resource keyVaultRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04
     principalType: 'ServicePrincipal'
   }
 }
+
+
+// Grant Key Vault Secrets Officer role to Logic App System-Assigned Identity
+resource keyVaultRoleAssignmentRenewalApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVaultId, renewallogicAppPrincipalId, 'Key Vault Secrets Officer')
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7') // Key Vault Secrets Officer
+    principalId: renewallogicAppPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 
 // Grant Storage Blob Data Contributor to Logic App System-Assigned Identity
 resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

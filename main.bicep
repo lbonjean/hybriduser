@@ -141,6 +141,7 @@ module roleAssignments 'role-assignments.bicep' = {
     logicAppPrincipalId: logicApp.outputs.logicAppPrincipalId
     keyVaultId: keyVault.id
     deadLetterStorageId: deadLetterStorage.id
+    renewallogicAppPrincipalId:subscriptionRenewal.outputs.renewalLogicAppPrincipalId
   }
 }
 
@@ -159,9 +160,6 @@ module subscriptionRenewal 'subscription-renewal.bicep' = {
     logAnalyticsPrimaryKey: logAnalyticsWorkspaceKey
     tags: tags
   }
-  dependsOn: [
-    roleAssignments
-  ]
 }
 
 // Monitoring and Alerts (optional - deploy after custom log table exists)

@@ -1,0 +1,73 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/powershell
+{
+	"name": "PowerShell",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	//"image": "mcr.microsoft.com/powershell:lts-debian-11",
+//	"image":"mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
+	"image":"mcr.microsoft.com/devcontainers/base:ubuntu",
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": "true",
+			"username": "vscode",
+			"upgradePackages": "false",
+			"nonFreePackages": "true"
+		}, 
+		
+			"ghcr.io/devcontainers/features/powershell:1": {
+				"installModules": true,
+				"version":"latest",
+				"modules":[
+					"PowerShellGet",
+					"PackageManagement",
+					"PSReadLine",
+					"az.accounts"
+					// "az.resources",
+					// "az.compute",
+					// "az.storage",
+					// "Az.Network",
+					// "AZ.Monitor",
+					// "Az.Reservations",
+					// "Az.ManagedServiceIdentity",
+					// "az.KeyVault",
+					// "Microsoft.Graph.Authentication",
+					// "Microsoft.Graph.Users",
+					// "Microsoft.Graph.Groups"
+				]
+			},
+			"ghcr.io/devcontainers/features/azure-cli:1": {
+				"version": "latest",
+				"installbicep": true		
+			}
+		
+	
+
+	},
+
+	"postCreateCommand": "mkdir -p /home/vscode/.config/powershell && echo '$env:PSModulePath = \"${containerWorkspaceFolder}/function/Modules:$env:PSModulePath\"' >> /home/vscode/.config/powershell/Microsoft.PowerShell_profile.ps1 && sudo chsh vscode -s \"$(which pwsh)\"",
+
+"workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+"workspaceFolder": "/workspace",
+	// Configure tool-specific properties.
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Set *default* container specific settings.json values on container create.
+			"settings": { 
+				"terminal.integrated.defaultProfile.linux": "pwsh"
+			},
+			
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"ms-vscode.powershell",
+				"ms-azuretools.vscode-azure-github-copilot"
+			]
+		}
+	}
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}

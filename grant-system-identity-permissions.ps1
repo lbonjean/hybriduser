@@ -37,7 +37,8 @@ Write-Host ""
 
 # Define permissions with their IDs
 $permissions = @(
-    @{
+ 
+@{
         Name = "User.Read.All"
         Id = "df021288-bdef-4463-88db-98f22de89214"
         Description = "Read all users' full profiles"
