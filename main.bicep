@@ -1,35 +1,36 @@
 @description('Location for all resources')
 param location string = resourceGroup().location
 
-@description('Environment name (e.g., dev, test, prod)')
-param environmentName string = 'dev'
+@description('Customer specific prefix')
+param namePrefix string
+
 
 @description('Admin Unit GUID to monitor')
-param adminUnitId string
+param adminUnitId string = 'Enter GUID of admin unite were the hybrid users are'
 
 @description('API-driven provisioning endpoint URL')
-param provisioningApiEndpoint string
+param provisioningApiEndpoint string = 'https://enter-api-driven-endpoint-here'
 
 @description('Email addresses for alerts (comma-separated)')
-param alertEmailAddresses array
+param alertEmailAddresses array = []
 
 @description('Deploy monitoring alerts (set to false for initial deployment, enable after custom log table exists)')
 param deployMonitoring bool = false
 
 @description('Tags to apply to all resources')
 param tags object = {
-  Environment: environmentName
   Application: 'HybridUserSync'
   ManagedBy: 'Bicep'
 }
 
 // Variables
-var resourcePrefix = 'hybriduser-${environmentName}'
-var keyVaultName = take('kv-${resourcePrefix}-${uniqueString(resourceGroup().id)}', 24)
-var logicAppName = 'logic-${resourcePrefix}'
-var logAnalyticsName = 'log-${resourcePrefix}'
-var actionGroupName = 'ag-${resourcePrefix}'
-var deadLetterStorageName = take('stdl${environmentName}${uniqueString(resourceGroup().id)}', 24)
+var resourcePrefix = '${namePrefix}-hybriduser'
+var keyVlt = take('${resourcePrefix}-${uniqueString(resourceGroup().id)}', 21)
+var keyVaultName = '${keyVlt}-kv'
+var logicAppName = '${resourcePrefix}-logic'
+var logAnalyticsName = '${resourcePrefix}-la'
+var actionGroupName = '${resourcePrefix}-ag'
+var deadLetterStorageName = take('stdl${uniqueString(resourceGroup().id)}', 24)
 
 // Key Vault for storing subscription ID
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -155,7 +156,6 @@ module subscriptionRenewal 'subscription-renewal.bicep' = {
     renewalLogicAppName: 'logic-${resourcePrefix}-renewal'
     keyVaultName: keyVault.name
     webhookCallbackUrl:logicApp.outputs.webhook
-//    webhookCallbackUrl: 'https://placeholder.com' // Will be updated by post-deployment script
     logAnalyticsWorkspaceId: logAnalytics.id
     logAnalyticsCustomerId: logAnalyticsWorkspaceId
     logAnalyticsPrimaryKey: logAnalyticsWorkspaceKey

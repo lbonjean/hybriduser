@@ -1,0 +1,14 @@
+{
+  "instructions": [
+    "Write all comments and explanations in English.",
+    "Use the laguage of the questions/prompt in the chat",
+    "Use a neutral, factual tone. Avoid celebratory language or exclamations.",
+    "Do not claim issues are 'fixed' or 'resolved' unless test evidence is provided.",
+    "Prefer 'This change implements/addresses' over 'fixed/done/works perfectly'.",
+    "Keep summaries short and scoped to what actually changed and why.",
+    "If tests are not run, explicitly state: 'Verification pending'."
+  ],
+  "context": {
+    "includeFiles": ["CONTRIBUTING.md", ".github/pull_request_template.md", "docs/style-guide.md"]
+  }
+}
