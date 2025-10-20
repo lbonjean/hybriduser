@@ -24,7 +24,7 @@ param logAnalyticsPrimaryKey string
 param tags object
 
 // Subscription Renewal Logic App
-// Runs every 36 hours to renew the Graph API subscription
+// Runs every 12 hours to renew the Graph API subscription
 resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   name: renewalLogicAppName
   location: location
@@ -56,7 +56,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           type: 'Recurrence'
           recurrence: {
             frequency: 'Hour'
-            interval: 35
+            interval: 12
           }
         }
       }
@@ -81,7 +81,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           actions: {
             // Try to get existing subscription ID from Key Vault
             Get_subscription_id_from_keyvault: {
-              type: 'Http'
+              type: 'Http'  
               inputs: {
                 method: 'GET'
                 uri: 'https://@{parameters(\'keyVaultName\')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4'
@@ -135,10 +135,10 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                   }
                   runAfter: {}
                 }
-                // Calculate new expiration (3 days from now)
+                // Calculate new expiration (12 hours)
                 Calculate_expiration: {
                   type: 'Compose'
-                  inputs: '@addMinutes(utcNow(), 4200)'
+                  inputs: '@addMinutes(utcNow(), 730)'
                   runAfter: {
                     Set_subscription_id: ['Succeeded']
                   }
@@ -207,7 +207,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                   }
                   Calculate_new_expiration: {
                     type: 'Compose'
-                    inputs: '@addMinutes(utcNow(), 4200)'
+                    inputs: '@addMinutes(utcNow(), 730)'
                     runAfter: {
                       Log_creating_new_subscription: ['Succeeded']
                     }

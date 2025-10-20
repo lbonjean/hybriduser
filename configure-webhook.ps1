@@ -48,8 +48,8 @@ try {
         -ResourceGroupName $ResourceGroupName `
         -Name $mainLogicAppName `
         -TriggerName "manual"
-    
-    Write-Host "✓ Callback URL retrieved" -ForegroundColor Green
+
+    Write-Host "✓ Callback URL retrieved: $($callbackUrl.Value)" -ForegroundColor Green
 }
 catch {
     Write-Host "✗ Failed to retrieve callback URL: $_" -ForegroundColor Red

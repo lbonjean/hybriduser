@@ -830,4 +830,6 @@ resource logicAppDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
 }
 
 output logicAppId string = logicApp.id
+@secure()
+output webhook string = listCallbackUrl(resourceId('Microsoft.Logic/workflows/triggers', logicAppName, 'manual'), '2019-05-01').value
 output logicAppPrincipalId string = logicApp.identity.principalId

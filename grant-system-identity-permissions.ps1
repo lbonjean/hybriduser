@@ -43,6 +43,11 @@ $permissions = @(
         Id = "df021288-bdef-4463-88db-98f22de89214"
         Description = "Read all users' full profiles"
     },
+@{
+        Name = "Directory.Readwrite.All"
+        Id = "19dbc75e-c2e2-444c-a770-ec69d8559fc7"
+        Description = "Read and write directory data"
+    },
     @{
         Name = "AdministrativeUnit.Read.All"
         Id = "134fd756-38ce-4afd-ba33-e9623dbe66c2"

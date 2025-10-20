@@ -21,8 +21,9 @@
 					"PowerShellGet",
 					"PackageManagement",
 					"PSReadLine",
-					"az.accounts"
-					// "az.resources",
+					"az.accounts",
+					"az.resources",
+					"az.logicapp"
 					// "az.compute",
 					// "az.storage",
 					// "Az.Network",
@@ -60,7 +61,9 @@
 			// Add the IDs of extensions you want installed when the container is created.
 			"extensions": [
 				"ms-vscode.powershell",
-				"ms-azuretools.vscode-azure-github-copilot"
+				"ms-azuretools.vscode-azure-github-copilot",
+				"ms-azuretools.vscode-bicep",
+				"esbenp.prettier-vscode"
 			]
 		}
 	}
