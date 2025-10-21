@@ -605,7 +605,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                               'urn:ietf:params:scim:schemas:core:2.0:User'
                                               'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User'
                                             ]
-                                            externalId: '@{if(empty(body(\'Parse_user_details\')?[\'employeeId\']), utcNow(\'yyyyMMddHHmmss\'), body(\'Parse_user_details\')?[\'employeeId\'])}'
+                                            externalId: '@{if(empty(body(\'Parse_user_details\')?[\'employeeId\']), concat(utcNow(\'yyMMddHHmmss\'), string(rand(1000, 9999))), body(\'Parse_user_details\')?[\'employeeId\'])}'
                                             userName: '@{body(\'Parse_user_details\')?[\'userPrincipalName\']}'
                                             name: {
                                               givenName: '@{body(\'Parse_user_details\')?[\'givenName\']}'
