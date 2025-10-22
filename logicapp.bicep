@@ -405,21 +405,37 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 }
                               }
                               // Check if source of authority needs updating
-                              Check_if_cloud_managed: {
+
+                              Check_if_needs_source_authority_update: {
                                 type: 'If'
                                 expression: {
-                                  not: {
-                                    equals: [
-                                      '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
-                                      true
-                                    ]
-                                  }
+
+
+
+
+
+
+                                  or: [
+                                    {
+                                      equals: [
+                                        '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
+                                        false
+                                      ]
+                                    }
+                                    {
+                                      equals: [
+                                        '@body(\'Parse_sync_behavior\')?[\'isCloudManaged\']'
+                                        null
+                                      ]
+                                    }
+                                  ]
                                 }
                                 runAfter: {
                                   Parse_sync_behavior: ['Succeeded']
                                 }
                                 actions: {
-                                  // isCloudManaged is NOT true - check if we should update
+
+                                  // User needs source of authority update - check if we should update
                                   Check_update_allowed: {
                                     type: 'If'
                                     expression: {
@@ -536,7 +552,8 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 }
                                 else: {
                                   actions: {
-                                    // isCloudManaged is already true - log and skip
+
+                                    // User is already cloud managed - log and skip
                                     Log_already_cloud_managed: {
                                       type: 'ApiConnection'
                                       inputs: {
