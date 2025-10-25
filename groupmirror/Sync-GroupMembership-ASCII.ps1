@@ -18,7 +18,7 @@
 .PARAMETER DetailedLogging
     Enable detailed console logging
 .PARAMETER CreateScheduledTask
-    Create a Windows scheduled task to run this script daily
+    Create a Windows scheduled task to run this script every 15 minutes
 .PARAMETER LogAnalyticsWorkspaceId
     Log Analytics Workspace ID for remote logging
 .PARAMETER LogAnalyticsSharedKey
@@ -184,6 +184,8 @@ function Get-EntraGroupMembers {
     
     $members = @()
     $uri = "https://graph.microsoft.com/v1.0/groups/$GroupId/members?`$select=id,userPrincipalName,onPremisesSecurityIdentifier,onPremisesSamAccountName"
+    
+    if ($DetailedLogging) { Write-Host "    Getting group members..." -ForegroundColor Gray }
     
     do {
         $response = Invoke-GraphAPI -Uri $uri -AccessToken $AccessToken
@@ -351,17 +353,20 @@ function New-GroupSyncScheduledTask {
         $taskExists = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         
         if ($taskExists) {
-            Write-Host "[WARNING] Scheduled task '$TaskName' already exists" -ForegroundColor Yellow
-            $overwrite = Read-Host "Do you want to overwrite it? (y/n)"
-            if ($overwrite -ne 'y' -and $overwrite -ne 'Y') {
-                return
+            Write-Host "[INFO] Removing existing scheduled task '$TaskName'..." -ForegroundColor Yellow
+            try {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+                Write-Host "  [OK] Existing task removed" -ForegroundColor Green
             }
-            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            catch {
+                Write-Host "  [ERROR] Failed to remove existing task: $($_.Exception.Message)" -ForegroundColor Red
+                throw
+            }
         }
         
         # Task settings
         $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-ExecutionPolicy Bypass -File `"$ScriptPath`""
-        $trigger = New-ScheduledTaskTrigger -Daily -At "02:00AM"  # Run daily at 2 AM
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 365)
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         
@@ -369,7 +374,7 @@ function New-GroupSyncScheduledTask {
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Synchronize group membership between Entra ID and on-premises AD"
         
         Write-Host "[OK] Scheduled task '$TaskName' created successfully" -ForegroundColor Green
-        Write-Host "  Schedule: Daily at 2:00 AM" -ForegroundColor Gray
+        Write-Host "  Schedule: Every 15 minutes" -ForegroundColor Gray
         Write-Host "  Script: $ScriptPath" -ForegroundColor Gray
         
         Write-SyncLog -EventType "Information" -Details "Scheduled task '$TaskName' created"
@@ -479,7 +484,7 @@ try {
                     try {
                         Add-ADGroupMember -Identity $adGroup.Name -Members $samAccountName -ErrorAction Stop
                         Write-Host "    [OK] Added successfully" -ForegroundColor Green
-                        Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Added" -Details "User added to group successfully"
+                        Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Added" -Details "User added"
                         $changesApplied = $true
                     }
                     catch {
@@ -489,7 +494,7 @@ try {
                     }
                 } else {
                     Write-Host "    (SIMULATION - would add)" -ForegroundColor Yellow
-                    Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Simulated Add" -Details "WhatIf mode - would add user"
+                    Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Simulated Add" -Details "WhatIf mode"
                 }
             }
             
@@ -502,7 +507,7 @@ try {
                     try {
                         Remove-ADGroupMember -Identity $adGroup.Name -Members $samAccountName -Confirm:$false -ErrorAction Stop
                         Write-Host "    [OK] Removed successfully" -ForegroundColor Green
-                        Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Removed" -Details "User removed from group successfully"
+                        Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Removed" -Details "User removed"
                         $changesApplied = $true
                     }
                     catch {
@@ -512,26 +517,27 @@ try {
                     }
                 } else {
                     Write-Host "    (SIMULATION - would remove)" -ForegroundColor Yellow
-                    Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Simulated Remove" -Details "WhatIf mode - would remove user"
+                    Write-SyncLog -EventType "Information" -GroupName $adGroup.Name -UserName $samAccountName -Action "Simulated Remove" -Details "WhatIf mode"
                 }
-            }
-            
-            if ($usersToAdd.Count -eq 0 -and $usersToRemove.Count -eq 0) {
-                Write-Host "  [OK] Already in sync" -ForegroundColor Green
             }
             
             if ($changesApplied -or ($WhatIf -and ($usersToAdd.Count -gt 0 -or $usersToRemove.Count -gt 0))) {
                 $syncedCount++
             }
+            
+            if ($usersToAdd.Count -eq 0 -and $usersToRemove.Count -eq 0) {
+                Write-Host "  [OK] Already synchronized" -ForegroundColor Green
+            }
+            
         }
         catch {
-            Write-Host "  [ERROR] Error processing group: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  [ERROR] Failed to process group: $($_.Exception.Message)" -ForegroundColor Red
+            Write-SyncLog -EventType "Error" -GroupName $adGroup.Name -Action "Sync Failed" -Details $_.Exception.Message
             $errorCount++
         }
         
         Write-Host ""
     }
-    
     # Summary
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "Sync Summary" -ForegroundColor Cyan
