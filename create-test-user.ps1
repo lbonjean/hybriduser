@@ -11,15 +11,37 @@
 
 param(
     [string]$AdminUnitName = "Hybrid",
-    [string]$Domain = "@bas-services.nl"
+    [string]$Domain
 )
+
+if (-not $Domain) {
+    # Get default domain if not provided
+    Write-Host "Getting default domain..." -ForegroundColor Cyan
+    try {
+        $Domain = az rest --method GET --url "https://graph.microsoft.com/v1.0/domains" --query "value[?isDefault].id" --output tsv
+        
+        if ($LASTEXITCODE -ne 0 -or -not $Domain) {
+            throw "Failed to get default domain"
+        }
+        
+        Write-Host "  Default Domain: $Domain" -ForegroundColor White
+        
+    } catch {
+        Write-Error "Failed to get default domain: $_"
+        exit 1
+    }
+}
+
+
 
 # Generate timestamp and unique values
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $userName = "test-$timestamp"
 $displayName = "Test User $timestamp"
-$userPrincipalName = "$userName$Domain"
+$userPrincipalName = "$userName@$Domain"
 $password = (New-Guid).ToString()
+
+
 
 Write-Host "Creating test user..." -ForegroundColor Cyan
 Write-Host "  Display Name: $displayName" -ForegroundColor Gray

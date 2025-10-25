@@ -153,7 +153,7 @@ module subscriptionRenewal 'subscription-renewal.bicep' = {
   name: 'subscription-renewal-deployment'
   params: {
     location: location
-    renewalLogicAppName: 'logic-${resourcePrefix}-renewal'
+    renewalLogicAppName: '${resourcePrefix}-renewal-logic'
     keyVaultName: keyVault.name
     webhookCallbackUrl:logicApp.outputs.webhook
     logAnalyticsWorkspaceId: logAnalytics.id
