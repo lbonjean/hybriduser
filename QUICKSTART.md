@@ -81,7 +81,7 @@ Dit script:
 Of in Azure Portal:
 1. Ga naar Logic Apps → `logic-hybriduser-dev-renewal`
 2. Check "Runs history" - laatste run moet succesvol zijn
-3. Ga naar Key Vault → Secrets → `graph-subscription-id` moet bestaan
+3. Ga naar Key Vault → Secrets → er mag exact 1 secret bestaan, met als naam de huidige Graph subscription GUID
 
 ## Testen
 

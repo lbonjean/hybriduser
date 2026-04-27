@@ -100,7 +100,7 @@ Set-AzContext -Subscription "Your-Subscription-Name"
 **Azure Portal**: Logic Apps → logic-hybriduser-{env}-renewal → Runs history
 
 ### Graph Subscription
-- [ ] Key Vault bevat secret `graph-subscription-id`
+- [ ] Key Vault bevat exact 1 secret, met als naam de actieve Graph subscription GUID
 - [ ] Secret value is een valid GUID
 - [ ] Log Analytics bevat `SubscriptionRenewalSuccess` event
 

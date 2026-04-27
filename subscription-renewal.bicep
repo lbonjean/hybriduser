@@ -23,6 +23,9 @@ param logAnalyticsPrimaryKey string
 @description('Tags')
 param tags object
 
+var keyVaultDnsSuffix = environment().suffixes.keyvaultDns
+var keyVaultDnsHost = startsWith(keyVaultDnsSuffix, '.') ? substring(keyVaultDnsSuffix, 1) : keyVaultDnsSuffix
+
 // Subscription Renewal Logic App
 // Runs every 12 hours to renew the Graph API subscription
 resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
@@ -79,93 +82,63 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
         Renewal_scope: {
           type: 'Scope'
           actions: {
-            // Try to get existing subscription ID from Key Vault
-            Get_subscription_id_from_keyvault: {
-              type: 'Http'  
+            // Get all subscription secrets from Key Vault
+            List_subscription_secrets_from_keyvault: {
+              type: 'Http'
               inputs: {
                 method: 'GET'
-                uri: 'https://@{parameters(\'keyVaultName\')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4'
+                uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets?api-version=7.4'
                 authentication: {
                   type: 'ManagedServiceIdentity'
-                  audience: 'https://vault.azure.net'
+                  audience: 'https://${keyVaultDnsHost}'
                 }
               }
               runAfter: {}
             }
-            Parse_keyvault_response: {
+            Parse_keyvault_secrets_response: {
               type: 'ParseJson'
               inputs: {
-                content: '@body(\'Get_subscription_id_from_keyvault\')'
+                content: '@body(\'List_subscription_secrets_from_keyvault\')'
                 schema: {
                   type: 'object'
                   properties: {
                     value: {
-                      type: 'string'
+                      type: 'array'
+                      items: {
+                        type: 'object'
+                        properties: {
+                          id: {
+                            type: 'string'
+                          }
+                        }
+                        required: [
+                          'id'
+                        ]
+                      }
                     }
                   }
+                  required: [
+                    'value'
+                  ]
                 }
               }
               runAfter: {
-                Get_subscription_id_from_keyvault: ['Succeeded']
+                List_subscription_secrets_from_keyvault: ['Succeeded']
               }
             }
-            // Check if we have a subscription ID
-            Check_if_subscription_exists: {
+            Validate_secret_count: {
               type: 'If'
               expression: {
-                and: [
-                  {
-                    equals: [
-                      '@actions(\'Get_subscription_id_from_keyvault\').status'
-                      'Succeeded'
-                    ]
-                  }
+                greater: [
+                  '@length(body(\'Parse_keyvault_secrets_response\')?[\'value\'])'
+                  1
                 ]
               }
               runAfter: {
-                Parse_keyvault_response: ['Succeeded', 'Skipped']
+                Parse_keyvault_secrets_response: ['Succeeded']
               }
               actions: {
-                // Try to renew existing subscription
-                Set_subscription_id: {
-                  type: 'SetVariable'
-                  inputs: {
-                    name: 'subscriptionId'
-                    value: '@body(\'Parse_keyvault_response\')?[\'value\']'
-                  }
-                  runAfter: {}
-                }
-                // Calculate new expiration (12 hours)
-                Calculate_expiration: {
-                  type: 'Compose'
-                  inputs: '@addMinutes(utcNow(), 730)'
-                  runAfter: {
-                    Set_subscription_id: ['Succeeded']
-                  }
-                }
-                // Renew subscription
-                Renew_subscription: {
-                  type: 'Http'
-                  inputs: {
-                    method: 'PATCH'
-                    uri: 'https://graph.microsoft.com/v1.0/subscriptions/@{variables(\'subscriptionId\')}'
-                    authentication: {
-                      type: 'ManagedServiceIdentity'
-                      audience: 'https://graph.microsoft.com'
-                    }
-                    headers: {
-                      'Content-Type': 'application/json'
-                    }
-                    body: {
-                      expirationDateTime: '@{outputs(\'Calculate_expiration\')}'
-                    }
-                  }
-                  runAfter: {
-                    Calculate_expiration: ['Succeeded']
-                  }
-                }
-                // Log successful renewal
-                Log_renewal_success: {
+                Log_multiple_secrets_error: {
                   type: 'ApiConnection'
                   inputs: {
                     host: {
@@ -174,134 +147,383 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                       }
                     }
                     method: 'post'
-                    body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',variables(\'subscriptionId\'),\'","NewExpiration":"\',outputs(\'Calculate_expiration\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                    body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalFailure","ErrorDetails":"More than one Key Vault subscription secret found","SecretCount":"\',string(length(body(\'Parse_keyvault_secrets_response\')?[\'value\'])),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
                     headers: {
                       'Log-Type': 'HybridUserSync'
                     }
                     path: '/api/logs'
                   }
+                  runAfter: {}
+                }
+                Fail_multiple_secrets_found: {
+                  type: 'Terminate'
+                  inputs: {
+                    runStatus: 'Failed'
+                    code: 'MultipleSubscriptionSecretsFound'
+                    message: 'Expected exactly zero or one Key Vault secret for subscription ID, but found more than one.'
+                  }
                   runAfter: {
-                    Renew_subscription: ['Succeeded']
+                    Log_multiple_secrets_error: ['Succeeded']
                   }
                 }
               }
               else: {
                 actions: {
-                  // Create new subscription
-                  Log_creating_new_subscription: {
-                    type: 'ApiConnection'
-                    inputs: {
-                      host: {
-                        connection: {
-                          name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
-                        }
-                      }
-                      method: 'post'
-                      body: '@{json(concat(\'[{"EventType":"CreatingNewSubscription","Timestamp":"\',utcNow(),\'"}]\'))}'
-                      headers: {
-                        'Log-Type': 'HybridUserSync'
-                      }
-                      path: '/api/logs'
+                  // Check if exactly one subscription secret exists
+                  Check_if_subscription_exists: {
+                    type: 'If'
+                    expression: {
+                      equals: [
+                        '@length(body(\'Parse_keyvault_secrets_response\')?[\'value\'])'
+                        1
+                      ]
                     }
                     runAfter: {}
-                  }
-                  Calculate_new_expiration: {
-                    type: 'Compose'
-                    inputs: '@addMinutes(utcNow(), 730)'
-                    runAfter: {
-                      Log_creating_new_subscription: ['Succeeded']
-                    }
-                  }
-                  // Create subscription for user updates
-                  Create_subscription: {
-                    type: 'Http'
-                    inputs: {
-                      method: 'POST'
-                      uri: 'https://graph.microsoft.com/v1.0/subscriptions'
-                      authentication: {
-                        type: 'ManagedServiceIdentity'
-                        audience: 'https://graph.microsoft.com'
+                    actions: {
+                      // Extract secret name (GUID) from secret ID URL
+                      Set_subscription_id: {
+                        type: 'SetVariable'
+                        inputs: {
+                          name: 'subscriptionId'
+                          value: '@{first(split(last(split(first(body(\'Parse_keyvault_secrets_response\')?[\'value\'])?[\'id\'],\'/secrets/\')),\'/\'))}'
+                        }
+                        runAfter: {}
                       }
-                      headers: {
-                        'Content-Type': 'application/json'
+                      // Calculate new expiration (12 hours)
+                      Calculate_expiration: {
+                        type: 'Compose'
+                        inputs: '@addMinutes(utcNow(), 730)'
+                        runAfter: {
+                          Set_subscription_id: ['Succeeded']
+                        }
                       }
-                      body: {
-                        changeType: 'updated'
-                        notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
-                        resource: '/users'
-                        expirationDateTime: '@{outputs(\'Calculate_new_expiration\')}'
-                        clientState: 'HybridUserSync'
+                      // Renew subscription
+                      Renew_subscription: {
+                        type: 'Http'
+                        inputs: {
+                          method: 'PATCH'
+                          uri: 'https://graph.microsoft.com/v1.0/subscriptions/@{variables(\'subscriptionId\')}'
+                          authentication: {
+                            type: 'ManagedServiceIdentity'
+                            audience: 'https://graph.microsoft.com'
+                          }
+                          headers: {
+                            'Content-Type': 'application/json'
+                          }
+                          body: {
+                            expirationDateTime: '@{outputs(\'Calculate_expiration\')}'
+                          }
+                        }
+                        runAfter: {
+                          Calculate_expiration: ['Succeeded']
+                        }
                       }
-                    }
-                    runAfter: {
-                      Calculate_new_expiration: ['Succeeded']
-                    }
-                  }
-                  Parse_create_response: {
-                    type: 'ParseJson'
-                    inputs: {
-                      content: '@body(\'Create_subscription\')'
-                      schema: {
-                        type: 'object'
-                        properties: {
-                          id: {
-                            type: 'string'
+                      // Log successful renewal
+                      Log_renewal_success: {
+                        type: 'ApiConnection'
+                        inputs: {
+                          host: {
+                            connection: {
+                              name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                            }
                           }
-                          resource: {
-                            type: 'string'
+                          method: 'post'
+                          body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',variables(\'subscriptionId\'),\'","NewExpiration":"\',outputs(\'Calculate_expiration\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                          headers: {
+                            'Log-Type': 'HybridUserSync'
                           }
-                          changeType: {
-                            type: 'string'
+                          path: '/api/logs'
+                        }
+                        runAfter: {
+                          Renew_subscription: ['Succeeded']
+                        }
+                      }
+                      // If renew fails because subscription is invalid, remove secret and create a new subscription
+                      Handle_failed_renewal: {
+                        type: 'If'
+                        expression: {
+                          or: [
+                            {
+                              equals: [
+                                '@outputs(\'Renew_subscription\')?[\'statusCode\']'
+                                404
+                              ]
+                            }
+                            {
+                              equals: [
+                                '@outputs(\'Renew_subscription\')?[\'statusCode\']'
+                                410
+                              ]
+                            }
+                          ]
+                        }
+                        runAfter: {
+                          Renew_subscription: ['Failed']
+                        }
+                        actions: {
+                          Delete_invalid_subscription_secret: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'DELETE'
+                              uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets/@{variables(\'subscriptionId\')}?api-version=7.4'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://${keyVaultDnsHost}'
+                              }
+                            }
+                            runAfter: {}
                           }
-                          expirationDateTime: {
-                            type: 'string'
+                          Log_creating_new_subscription_after_invalid: {
+                            type: 'ApiConnection'
+                            inputs: {
+                              host: {
+                                connection: {
+                                  name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                }
+                              }
+                              method: 'post'
+                              body: '@{json(concat(\'[{"EventType":"CreatingNewSubscription","Reason":"InvalidExistingSubscription","PreviousSubscriptionId":"\',variables(\'subscriptionId\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                              headers: {
+                                'Log-Type': 'HybridUserSync'
+                              }
+                              path: '/api/logs'
+                            }
+                            runAfter: {
+                              Delete_invalid_subscription_secret: ['Succeeded', 'Failed']
+                            }
+                          }
+                          Calculate_new_expiration_after_invalid: {
+                            type: 'Compose'
+                            inputs: '@addMinutes(utcNow(), 730)'
+                            runAfter: {
+                              Log_creating_new_subscription_after_invalid: ['Succeeded']
+                            }
+                          }
+                          Create_subscription_after_invalid: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'POST'
+                              uri: 'https://graph.microsoft.com/v1.0/subscriptions'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://graph.microsoft.com'
+                              }
+                              headers: {
+                                'Content-Type': 'application/json'
+                              }
+                              body: {
+                                changeType: 'updated'
+                                notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
+                                resource: '/users'
+                                expirationDateTime: '@{outputs(\'Calculate_new_expiration_after_invalid\')}'
+                                clientState: 'HybridUserSync'
+                              }
+                            }
+                            runAfter: {
+                              Calculate_new_expiration_after_invalid: ['Succeeded']
+                            }
+                          }
+                          Parse_create_response_after_invalid: {
+                            type: 'ParseJson'
+                            inputs: {
+                              content: '@body(\'Create_subscription_after_invalid\')'
+                              schema: {
+                                type: 'object'
+                                properties: {
+                                  id: {
+                                    type: 'string'
+                                  }
+                                  resource: {
+                                    type: 'string'
+                                  }
+                                  changeType: {
+                                    type: 'string'
+                                  }
+                                  expirationDateTime: {
+                                    type: 'string'
+                                  }
+                                }
+                              }
+                            }
+                            runAfter: {
+                              Create_subscription_after_invalid: ['Succeeded']
+                            }
+                          }
+                          Store_subscription_id_after_invalid: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'PUT'
+                              uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets/@{body(\'Parse_create_response_after_invalid\')?[\'id\']}?api-version=7.4'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://${keyVaultDnsHost}'
+                              }
+                              headers: {
+                                'Content-Type': 'application/json'
+                              }
+                              body: {
+                                value: '@{body(\'Parse_create_response_after_invalid\')?[\'id\']}'
+                              }
+                            }
+                            runAfter: {
+                              Parse_create_response_after_invalid: ['Succeeded']
+                            }
+                          }
+                          Log_creation_success_after_invalid: {
+                            type: 'ApiConnection'
+                            inputs: {
+                              host: {
+                                connection: {
+                                  name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                }
+                              }
+                              method: 'post'
+                              body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',body(\'Parse_create_response_after_invalid\')?[\'id\'],\'","NewExpiration":"\',outputs(\'Calculate_new_expiration_after_invalid\'),\'","Action":"RecreatedAfterInvalid","Timestamp":"\',utcNow(),\'"}]\'))}'
+                              headers: {
+                                'Log-Type': 'HybridUserSync'
+                              }
+                              path: '/api/logs'
+                            }
+                            runAfter: {
+                              Store_subscription_id_after_invalid: ['Succeeded']
+                            }
+                          }
+                        }
+                        else: {
+                          actions: {
+                            Fail_nonrecoverable_renewal_error: {
+                              type: 'Terminate'
+                              inputs: {
+                                runStatus: 'Failed'
+                                code: 'SubscriptionRenewalFailed'
+                                message: 'Renewal failed with a non-recoverable error and was not recreated.'
+                              }
+                              runAfter: {}
+                            }
                           }
                         }
                       }
                     }
-                    runAfter: {
-                      Create_subscription: ['Succeeded']
-                    }
-                  }
-                  // Store subscription ID in Key Vault
-                  Store_subscription_id: {
-                    type: 'Http'
-                    inputs: {
-                      method: 'PUT'
-                      uri: 'https://@{parameters(\'keyVaultName\')}.vault.azure.net/secrets/graph-subscription-id?api-version=7.4'
-                      authentication: {
-                        type: 'ManagedServiceIdentity'
-                        audience: 'https://vault.azure.net'
-                      }
-                      headers: {
-                        'Content-Type': 'application/json'
-                      }
-                      body: {
-                        value: '@{body(\'Parse_create_response\')?[\'id\']}'
-                      }
-                    }
-                    runAfter: {
-                      Parse_create_response: ['Succeeded']
-                    }
-                  }
-                  // Log successful creation
-                  Log_creation_success: {
-                    type: 'ApiConnection'
-                    inputs: {
-                      host: {
-                        connection: {
-                          name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                    else: {
+                      actions: {
+                        // Create new subscription when no existing secret is found
+                        Log_creating_new_subscription: {
+                          type: 'ApiConnection'
+                          inputs: {
+                            host: {
+                              connection: {
+                                name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                              }
+                            }
+                            method: 'post'
+                            body: '@{json(concat(\'[{"EventType":"CreatingNewSubscription","Timestamp":"\',utcNow(),\'"}]\'))}'
+                            headers: {
+                              'Log-Type': 'HybridUserSync'
+                            }
+                            path: '/api/logs'
+                          }
+                          runAfter: {}
+                        }
+                        Calculate_new_expiration: {
+                          type: 'Compose'
+                          inputs: '@addMinutes(utcNow(), 730)'
+                          runAfter: {
+                            Log_creating_new_subscription: ['Succeeded']
+                          }
+                        }
+                        // Create subscription for user updates
+                        Create_subscription: {
+                          type: 'Http'
+                          inputs: {
+                            method: 'POST'
+                            uri: 'https://graph.microsoft.com/v1.0/subscriptions'
+                            authentication: {
+                              type: 'ManagedServiceIdentity'
+                              audience: 'https://graph.microsoft.com'
+                            }
+                            headers: {
+                              'Content-Type': 'application/json'
+                            }
+                            body: {
+                              changeType: 'updated'
+                              notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
+                              resource: '/users'
+                              expirationDateTime: '@{outputs(\'Calculate_new_expiration\')}'
+                              clientState: 'HybridUserSync'
+                            }
+                          }
+                          runAfter: {
+                            Calculate_new_expiration: ['Succeeded']
+                          }
+                        }
+                        Parse_create_response: {
+                          type: 'ParseJson'
+                          inputs: {
+                            content: '@body(\'Create_subscription\')'
+                            schema: {
+                              type: 'object'
+                              properties: {
+                                id: {
+                                  type: 'string'
+                                }
+                                resource: {
+                                  type: 'string'
+                                }
+                                changeType: {
+                                  type: 'string'
+                                }
+                                expirationDateTime: {
+                                  type: 'string'
+                                }
+                              }
+                            }
+                          }
+                          runAfter: {
+                            Create_subscription: ['Succeeded']
+                          }
+                        }
+                        // Store subscription ID in Key Vault using the GUID as secret name
+                        Store_subscription_id: {
+                          type: 'Http'
+                          inputs: {
+                            method: 'PUT'
+                            uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets/@{body(\'Parse_create_response\')?[\'id\']}?api-version=7.4'
+                            authentication: {
+                              type: 'ManagedServiceIdentity'
+                              audience: 'https://${keyVaultDnsHost}'
+                            }
+                            headers: {
+                              'Content-Type': 'application/json'
+                            }
+                            body: {
+                              value: '@{body(\'Parse_create_response\')?[\'id\']}'
+                            }
+                          }
+                          runAfter: {
+                            Parse_create_response: ['Succeeded']
+                          }
+                        }
+                        // Log successful creation
+                        Log_creation_success: {
+                          type: 'ApiConnection'
+                          inputs: {
+                            host: {
+                              connection: {
+                                name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                              }
+                            }
+                            method: 'post'
+                            body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',body(\'Parse_create_response\')?[\'id\'],\'","NewExpiration":"\',outputs(\'Calculate_new_expiration\'),\'","Action":"Created","Timestamp":"\',utcNow(),\'"}]\'))}'
+                            headers: {
+                              'Log-Type': 'HybridUserSync'
+                            }
+                            path: '/api/logs'
+                          }
+                          runAfter: {
+                            Store_subscription_id: ['Succeeded']
+                          }
                         }
                       }
-                      method: 'post'
-                      body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',body(\'Parse_create_response\')?[\'id\'],\'","NewExpiration":"\',outputs(\'Calculate_new_expiration\'),\'","Action":"Created","Timestamp":"\',utcNow(),\'"}]\'))}'
-                      headers: {
-                        'Log-Type': 'HybridUserSync'
-                      }
-                      path: '/api/logs'
-                    }
-                    runAfter: {
-                      Store_subscription_id: ['Succeeded']
                     }
                   }
                 }

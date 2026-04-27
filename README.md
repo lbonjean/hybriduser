@@ -118,7 +118,7 @@ az logicapp show --name "<namePrefix>-hybriduser-renewal-logic" --resource-group
 Or via Azure Portal:
 - Navigate to Logic Apps → `<namePrefix>-hybriduser-renewal-logic`
 - Check "Runs history" - first run should succeed
-- Verify Key Vault → Secrets → `graph-subscription-id` exists
+- Verify Key Vault → Secrets contains exactly one secret, and the secret name is the current Graph subscription GUID
 
 ### 2. Test Main Logic App
 Add a test user to the Administrative Unit and update their profile. Check Log Analytics for processing events.
