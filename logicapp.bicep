@@ -70,6 +70,10 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           defaultValue: deadLetterContainerName
           type: 'String'
         }
+        storageEndpointSuffix: {
+          defaultValue: environment().suffixes.storage
+          type: 'String'
+        }
         disableSourceOfAuthorityUpdate: {
           defaultValue: false
           type: 'Bool'
@@ -700,6 +704,197 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               }
                               runAfter: {}
                             }
+                            // If user is hybrid and cloud managed, revert source of authority to on-prem
+                            Check_if_hybrid_outside_admin_unit: {
+                              type: 'If'
+                              expression: {
+                                not: {
+                                  equals: [
+                                    '@body(\'Parse_user_details\')?[\'onPremisesImmutableId\']'
+                                    null
+                                  ]
+                                }
+                              }
+                              actions: {
+                                Get_sync_behavior_outside_admin_unit: {
+                                  type: 'Http'
+                                  inputs: {
+                                    method: 'GET'
+                                    uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
+                                    authentication: {
+                                      type: 'ManagedServiceIdentity'
+                                      audience: 'https://graph.microsoft.com'
+                                    }
+                                  }
+                                  runAfter: {}
+                                }
+                                Parse_sync_behavior_outside_admin_unit: {
+                                  type: 'ParseJson'
+                                  inputs: {
+                                    content: '@body(\'Get_sync_behavior_outside_admin_unit\')'
+                                    schema: {
+                                      type: 'object'
+                                      properties: {
+                                        isCloudManaged: { type: ['boolean', 'null'] }
+                                      }
+                                    }
+                                  }
+                                  runAfter: {
+                                    Get_sync_behavior_outside_admin_unit: ['Succeeded']
+                                  }
+                                }
+                                Check_if_needs_source_authority_revert: {
+                                  type: 'If'
+                                  expression: {
+                                    equals: [
+                                      '@body(\'Parse_sync_behavior_outside_admin_unit\')?[\'isCloudManaged\']'
+                                      true
+                                    ]
+                                  }
+                                  runAfter: {
+                                    Parse_sync_behavior_outside_admin_unit: ['Succeeded']
+                                  }
+                                  actions: {
+                                    Check_revert_allowed: {
+                                      type: 'If'
+                                      expression: {
+                                        and: [
+                                          {
+                                            equals: [
+                                              '@parameters(\'disableSourceOfAuthorityUpdate\')'
+                                              false
+                                            ]
+                                          }
+                                          {
+                                            or: [
+                                              {
+                                                equals: [
+                                                  '@length(parameters(\'allowedAdminUnitNames\'))'
+                                                  0
+                                                ]
+                                              }
+                                              {
+                                                contains: [
+                                                  '@parameters(\'allowedAdminUnitNames\')'
+                                                  '@body(\'Parse_admin_unit_details\')?[\'displayName\']'
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                      runAfter: {}
+                                      actions: {
+                                        Log_reverting_source_of_authority: {
+                                          type: 'ApiConnection'
+                                          inputs: {
+                                            host: {
+                                              connection: {
+                                                name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                              }
+                                            }
+                                            method: 'post'
+                                            body: '@{json(concat(\'[{"EventType":"RevertingSourceOfAuthority","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","ImmutableId":"\',body(\'Parse_user_details\')?[\'onPremisesImmutableId\'],\'","IsCloudManaged":"true","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                            headers: {
+                                              'Log-Type': 'HybridUserSync'
+                                            }
+                                            path: '/api/logs'
+                                          }
+                                          runAfter: {}
+                                        }
+                                        Revert_source_of_authority_to_onprem: {
+                                          type: 'Http'
+                                          inputs: {
+                                            method: 'PATCH'
+                                            uri: 'https://graph.microsoft.com/beta/users/@{variables(\'userId\')}/onPremisesSyncBehavior'
+                                            authentication: {
+                                              type: 'ManagedServiceIdentity'
+                                              audience: 'https://graph.microsoft.com'
+                                            }
+                                            headers: {
+                                              'Content-Type': 'application/json'
+                                            }
+                                            body: {
+                                              isCloudManaged: false
+                                            }
+                                          }
+                                          runAfter: {
+                                            Log_reverting_source_of_authority: ['Succeeded']
+                                          }
+                                        }
+                                        Log_source_of_authority_revert_success: {
+                                          type: 'ApiConnection'
+                                          inputs: {
+                                            host: {
+                                              connection: {
+                                                name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                              }
+                                            }
+                                            method: 'post'
+                                            body: '@{json(concat(\'[{"EventType":"SourceOfAuthorityRevertSuccess","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                            headers: {
+                                              'Log-Type': 'HybridUserSync'
+                                            }
+                                            path: '/api/logs'
+                                          }
+                                          runAfter: {
+                                            Revert_source_of_authority_to_onprem: ['Succeeded']
+                                          }
+                                        }
+                                      }
+                                      else: {
+                                        actions: {
+                                          Log_revert_not_allowed: {
+                                            type: 'ApiConnection'
+                                            inputs: {
+                                              host: {
+                                                connection: {
+                                                  name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                                }
+                                              }
+                                              method: 'post'
+                                              body: '@{json(concat(\'[{"EventType":"SourceOfAuthorityRevertNotAllowed","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","AdminUnitName":"\',body(\'Parse_admin_unit_details\')?[\'displayName\'],\'","UpdateDisabled":"\',parameters(\'disableSourceOfAuthorityUpdate\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                              headers: {
+                                                'Log-Type': 'HybridUserSync'
+                                              }
+                                              path: '/api/logs'
+                                            }
+                                            runAfter: {}
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                  else: {
+                                    actions: {
+                                      Log_already_onprem_managed_outside_admin_unit: {
+                                        type: 'ApiConnection'
+                                        inputs: {
+                                          host: {
+                                            connection: {
+                                              name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                            }
+                                          }
+                                          method: 'post'
+                                          body: '@{json(concat(\'[{"EventType":"AlreadyOnPremManagedOutsideAdminUnit","UserId":"\',variables(\'userId\'),\'","UserPrincipalName":"\',body(\'Parse_user_details\')?[\'userPrincipalName\'],\'","IsCloudManaged":"\',string(body(\'Parse_sync_behavior_outside_admin_unit\')?[\'isCloudManaged\']),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                                          headers: {
+                                            'Log-Type': 'HybridUserSync'
+                                          }
+                                          path: '/api/logs'
+                                        }
+                                        runAfter: {}
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                              else: {
+                                actions: {}
+                              }
+                              runAfter: {
+                                Log_user_not_in_admin_unit: ['Succeeded']
+                              }
+                            }
                           }
                         }
                         runAfter: {
@@ -740,7 +935,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                         type: 'Http'
                         inputs: {
                           method: 'PUT'
-                          uri: 'https://@{parameters(\'deadLetterStorageAccount\')}.blob.core.windows.net/@{parameters(\'deadLetterContainer\')}/@{utcNow(\'yyyy-MM-dd_HHmmss\')}_@{variables(\'userId\')}.json'
+                          uri: 'https://@{parameters(\'deadLetterStorageAccount\')}.blob.@{parameters(\'storageEndpointSuffix\')}/@{parameters(\'deadLetterContainer\')}/@{utcNow(\'yyyy-MM-dd_HHmmss\')}_@{variables(\'userId\')}.json'
                           authentication: {
                             type: 'ManagedServiceIdentity'
                             audience: 'https://storage.azure.com/'
