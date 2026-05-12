@@ -218,6 +218,26 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                           Calculate_expiration: ['Succeeded']
                         }
                       }
+                      Parse_renew_response: {
+                        type: 'ParseJson'
+                        inputs: {
+                          content: '@body(\'Renew_subscription\')'
+                          schema: {
+                            type: 'object'
+                            properties: {
+                              id: {
+                                type: 'string'
+                              }
+                              changeType: {
+                                type: ['string', 'null']
+                              }
+                            }
+                          }
+                        }
+                        runAfter: {
+                          Renew_subscription: ['Succeeded']
+                        }
+                      }
                       // Log successful renewal
                       Log_renewal_success: {
                         type: 'ApiConnection'
@@ -236,6 +256,168 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                         }
                         runAfter: {
                           Renew_subscription: ['Succeeded']
+                        }
+                      }
+                      // Recreate old subscriptions that were created without deleted changeType
+                      Check_if_subscription_needs_recreation: {
+                        type: 'If'
+                        expression: {
+                          or: [
+                            {
+                              equals: [
+                                '@body(\'Parse_renew_response\')?[\'changeType\']'
+                                null
+                              ]
+                            }
+                            {
+                              not: {
+                                contains: [
+                                  '@toLower(body(\'Parse_renew_response\')?[\'changeType\'])'
+                                  'deleted'
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                        runAfter: {
+                          Parse_renew_response: ['Succeeded']
+                        }
+                        actions: {
+                          Delete_existing_subscription: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'DELETE'
+                              uri: 'https://graph.microsoft.com/v1.0/subscriptions/@{variables(\'subscriptionId\')}'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://graph.microsoft.com'
+                              }
+                            }
+                            runAfter: {}
+                          }
+                          Delete_existing_subscription_secret: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'DELETE'
+                              uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets/@{variables(\'subscriptionId\')}?api-version=7.4'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://${keyVaultDnsHost}'
+                              }
+                            }
+                            runAfter: {
+                              Delete_existing_subscription: ['Succeeded', 'Failed']
+                            }
+                          }
+                          Log_recreating_subscription_for_delete_events: {
+                            type: 'ApiConnection'
+                            inputs: {
+                              host: {
+                                connection: {
+                                  name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                }
+                              }
+                              method: 'post'
+                              body: '@{json(concat(\'[{"EventType":"CreatingNewSubscription","Reason":"MissingDeletedChangeType","PreviousSubscriptionId":"\',variables(\'subscriptionId\'),\'","Timestamp":"\',utcNow(),\'"}]\'))}'
+                              headers: {
+                                'Log-Type': 'HybridUserSync'
+                              }
+                              path: '/api/logs'
+                            }
+                            runAfter: {
+                              Delete_existing_subscription_secret: ['Succeeded', 'Failed']
+                            }
+                          }
+                          Calculate_new_expiration_after_recreate: {
+                            type: 'Compose'
+                            inputs: '@addMinutes(utcNow(), 730)'
+                            runAfter: {
+                              Log_recreating_subscription_for_delete_events: ['Succeeded']
+                            }
+                          }
+                          Create_subscription_after_recreate: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'POST'
+                              uri: 'https://graph.microsoft.com/v1.0/subscriptions'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://graph.microsoft.com'
+                              }
+                              headers: {
+                                'Content-Type': 'application/json'
+                              }
+                              body: {
+                                changeType: 'updated,deleted'
+                                notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
+                                resource: '/users'
+                                expirationDateTime: '@{outputs(\'Calculate_new_expiration_after_recreate\')}'
+                                clientState: 'HybridUserSync'
+                              }
+                            }
+                            runAfter: {
+                              Calculate_new_expiration_after_recreate: ['Succeeded']
+                            }
+                          }
+                          Parse_create_response_after_recreate: {
+                            type: 'ParseJson'
+                            inputs: {
+                              content: '@body(\'Create_subscription_after_recreate\')'
+                              schema: {
+                                type: 'object'
+                                properties: {
+                                  id: {
+                                    type: 'string'
+                                  }
+                                }
+                              }
+                            }
+                            runAfter: {
+                              Create_subscription_after_recreate: ['Succeeded']
+                            }
+                          }
+                          Store_subscription_id_after_recreate: {
+                            type: 'Http'
+                            inputs: {
+                              method: 'PUT'
+                              uri: 'https://@{parameters(\'keyVaultName\')}.${keyVaultDnsHost}/secrets/@{body(\'Parse_create_response_after_recreate\')?[\'id\']}?api-version=7.4'
+                              authentication: {
+                                type: 'ManagedServiceIdentity'
+                                audience: 'https://${keyVaultDnsHost}'
+                              }
+                              headers: {
+                                'Content-Type': 'application/json'
+                              }
+                              body: {
+                                value: '@{body(\'Parse_create_response_after_recreate\')?[\'id\']}'
+                              }
+                            }
+                            runAfter: {
+                              Parse_create_response_after_recreate: ['Succeeded']
+                            }
+                          }
+                          Log_recreation_success_after_recreate: {
+                            type: 'ApiConnection'
+                            inputs: {
+                              host: {
+                                connection: {
+                                  name: '@parameters(\'$connections\')[\'azureloganalyticsdatacollector\'][\'connectionId\']'
+                                }
+                              }
+                              method: 'post'
+                              body: '@{json(concat(\'[{"EventType":"SubscriptionRenewalSuccess","SubscriptionId":"\',body(\'Parse_create_response_after_recreate\')?[\'id\'],\'","NewExpiration":"\',outputs(\'Calculate_new_expiration_after_recreate\'),\'","Action":"RecreatedForDeletedChangeType","Timestamp":"\',utcNow(),\'"}]\'))}'
+                              headers: {
+                                'Log-Type': 'HybridUserSync'
+                              }
+                              path: '/api/logs'
+                            }
+                            runAfter: {
+                              Store_subscription_id_after_recreate: ['Succeeded']
+                            }
+                          }
+                        }
+                        else: {
+                          actions: {}
                         }
                       }
                       // If renew fails because subscription is invalid, remove secret and create a new subscription
@@ -312,7 +494,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                                 'Content-Type': 'application/json'
                               }
                               body: {
-                                changeType: 'updated'
+                                changeType: 'updated,deleted'
                                 notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
                                 resource: '/users'
                                 expirationDateTime: '@{outputs(\'Calculate_new_expiration_after_invalid\')}'
@@ -445,7 +627,7 @@ resource renewalLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                               'Content-Type': 'application/json'
                             }
                             body: {
-                              changeType: 'updated'
+                              changeType: 'updated,deleted'
                               notificationUrl: '@{parameters(\'webhookCallbackUrl\')}'
                               resource: '/users'
                               expirationDateTime: '@{outputs(\'Calculate_new_expiration\')}'
