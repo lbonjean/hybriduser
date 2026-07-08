@@ -57,3 +57,69 @@ $result | Format-List
 
 ./grant-system-identity-permissions.ps1 -principalId $result.logicAppPrincipalId.value
 ./grant-system-identity-permissions.ps1 -principalId $result.renewalLogicAppPrincipalId.value
+
+Write-Host "Granting 'User Administrator' scoped role on administrative unit to primary Logic App identity..." -ForegroundColor Cyan
+
+$userAdministratorRoleTemplateId = "fe930be7-5e62-47db-91af-98c3a49a38b1"
+
+# Get active directory role instance for User Administrator.
+$userAdministratorRoleResponse = az rest --method GET --uri "https://graph.microsoft.com/v1.0/directoryRoles?`$filter=roleTemplateId eq '$userAdministratorRoleTemplateId'" --headers "Content-Type=application/json" 2>&1
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to query User Administrator directory role." -ForegroundColor Red
+    Write-Host "Details: $userAdministratorRoleResponse" -ForegroundColor Red
+    exit 1
+}
+
+$userAdministratorRole = $userAdministratorRoleResponse | ConvertFrom-Json
+
+if ($null -eq $userAdministratorRole.value -or $userAdministratorRole.value.Count -eq 0) {
+    Write-Host "User Administrator role is not active yet. Activating it..." -ForegroundColor Yellow
+
+    $activateRoleBody = @{ roleTemplateId = $userAdministratorRoleTemplateId } | ConvertTo-Json -Compress
+    $activationResult = az rest --method POST --uri "https://graph.microsoft.com/v1.0/directoryRoles" --headers "Content-Type=application/json" --body $activateRoleBody 2>&1
+
+    if ($LASTEXITCODE -ne 0 -and $activationResult -notlike "*already exists*") {
+        Write-Host "ERROR: Failed to activate User Administrator directory role." -ForegroundColor Red
+        Write-Host "Details: $activationResult" -ForegroundColor Red
+        exit 1
+    }
+
+    $userAdministratorRoleResponse = az rest --method GET --uri "https://graph.microsoft.com/v1.0/directoryRoles?`$filter=roleTemplateId eq '$userAdministratorRoleTemplateId'" --headers "Content-Type=application/json" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Failed to re-query User Administrator directory role after activation." -ForegroundColor Red
+        Write-Host "Details: $userAdministratorRoleResponse" -ForegroundColor Red
+        exit 1
+    }
+
+    $userAdministratorRole = $userAdministratorRoleResponse | ConvertFrom-Json
+}
+
+if ($null -eq $userAdministratorRole.value -or $userAdministratorRole.value.Count -eq 0) {
+    Write-Host "ERROR: Could not resolve User Administrator directory role ID." -ForegroundColor Red
+    exit 1
+}
+
+$userAdministratorRoleId = $userAdministratorRole.value[0].id
+$logicAppPrincipalId = $result.logicAppPrincipalId.value
+
+$scopedRoleAssignmentBody = @{
+    roleId = $userAdministratorRoleId
+    roleMemberInfo = @{
+        id = $logicAppPrincipalId
+    }
+} | ConvertTo-Json -Depth 5 -Compress
+
+$roleAssignmentResult = az rest --method POST --uri "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$adminUnitId/scopedRoleMembers" --headers "Content-Type=application/json" --body $scopedRoleAssignmentBody 2>&1
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Successfully granted 'User Administrator' scoped role to principal $logicAppPrincipalId on administrative unit $adminUnitId." -ForegroundColor Green
+}
+elseif ($roleAssignmentResult -like "*added object references already exist*" -or $roleAssignmentResult -like "*already exists*") {
+    Write-Host "Scoped role assignment already exists for principal $logicAppPrincipalId on administrative unit $adminUnitId." -ForegroundColor Yellow
+}
+else {
+    Write-Host "ERROR: Failed to assign 'User Administrator' scoped role on administrative unit." -ForegroundColor Red
+    Write-Host "Details: $roleAssignmentResult" -ForegroundColor Red
+    exit 1
+}

@@ -25,7 +25,8 @@ param tags object = {
 
 // Variables
 var resourcePrefix = '${namePrefix}-hybriduser'
-var keyVlt = take('${resourcePrefix}-${uniqueString(resourceGroup().id)}', 21)
+var keyVlt = take('${resourcePrefix}-${uniqueString(resourceGroup().name)}', 21)
+//var keyVlt = take('${resourcePrefix}-${uniqueString(resourceGroup().id)}', 21)
 var keyVaultName = '${keyVlt}-kv'
 var logicAppName = '${resourcePrefix}-logic'
 var logAnalyticsName = '${resourcePrefix}-la'
@@ -44,9 +45,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    enablePurgeProtection: true
+    enableSoftDelete: false
+    //softDeleteRetentionInDays: 90
+    //enablePurgeProtection: false
     networkAcls: {
       defaultAction: 'Allow'
       bypass: 'AzureServices'
